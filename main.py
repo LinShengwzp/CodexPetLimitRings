@@ -48,17 +48,29 @@ def cli() -> int:
 
     if options.probe or options.diagnose:
         from rings.pet import PetLocator
+        from rings.calibration import read_settings, sprite_from_anchor
+        from rings.state import inspect_state_file
         pet, details = PetLocator().inspect(diagnostic=options.diagnose)
+        settings = read_settings()
+        manual = None
+        if pet:
+            work = pet.work_area
+            key = f"{work.left},{work.top},{work.right},{work.bottom}"
+            calibrated = sprite_from_anchor(pet.host_rect, settings.get("calibrations", {}).get(key))
+            if calibrated is not None and not pet.precise:
+                manual = calibrated
         output = {
             "found": pet is not None,
-            "mascot_rect": pet.rect.__dict__ if pet else None,
+            "mascot_rect": (manual or pet.rect).__dict__ if pet else None,
             "host_rect": pet.host_rect.__dict__ if pet else None,
-            "position_source": pet.source if pet else None,
+            "position_source": ("manually-calibrated" if manual else pet.source) if pet else None,
             "precise_mascot_geometry": pet.precise if pet else None,
+            "manual_calibration_active": manual is not None,
             "hwnd": pet.handle if pet else None,
             "dpi": pet.dpi if pet else None,
             "monitor_work_area": pet.work_area.__dict__ if pet else None,
             "saved_codex_state": details,
+            "codex_state_file": inspect_state_file(),
         }
         print(json.dumps(output, ensure_ascii=False, indent=2))
         if pet is None:
