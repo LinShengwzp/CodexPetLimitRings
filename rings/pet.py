@@ -31,6 +31,16 @@ class PetLocator:
         self.dwm = ctypes.windll.dwmapi
         self.proc_type = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
         self.user32.EnumWindows.argtypes = (self.proc_type, wintypes.LPARAM)
+        self.user32.EnumWindows.restype = wintypes.BOOL
+        self.user32.IsWindowVisible.argtypes = (wintypes.HWND,)
+        self.user32.IsWindowVisible.restype = wintypes.BOOL
+        self.user32.IsIconic.argtypes = (wintypes.HWND,)
+        self.user32.IsIconic.restype = wintypes.BOOL
+        self.user32.GetClassNameW.argtypes = (wintypes.HWND, wintypes.LPWSTR, ctypes.c_int)
+        self.dwm.DwmGetWindowAttribute.argtypes = (wintypes.HWND, wintypes.DWORD, ctypes.c_void_p, wintypes.DWORD)
+        self.dwm.DwmGetWindowAttribute.restype = ctypes.c_long
+        self.user32.GetDpiForWindow.argtypes = (wintypes.HWND,)
+        self.user32.GetDpiForWindow.restype = wintypes.UINT
         self.user32.GetWindowRect.argtypes = (wintypes.HWND, ctypes.POINTER(_RECT))
         self.user32.GetWindowThreadProcessId.argtypes = (wintypes.HWND, ctypes.POINTER(wintypes.DWORD))
         self.user32.MonitorFromWindow.argtypes = (wintypes.HWND, wintypes.DWORD)
