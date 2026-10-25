@@ -1,6 +1,6 @@
 import unittest
 
-from rings.core import Quota, Quotas, Rect, follow_position, parse_quotas, explain
+from rings.core import PetMotionTracker, Quota, Quotas, Rect, follow_position, parse_quotas, explain
 
 
 class QuotaTests(unittest.TestCase):
@@ -55,6 +55,31 @@ class QuotaTests(unittest.TestCase):
         self.assertEqual(follow_position(Rect(650, 100, 750, 300), 120, 70, area), (522, 165))
         self.assertEqual(follow_position(Rect(150, 100, 250, 300), 120, 70, area), (258, 165))
         self.assertEqual(follow_position(Rect(650, 100, 750, 300), 120, 70, area, 900, -500), (680, 0))
+
+
+    def test_large_codex_host_default_near_lower_left(self):
+        # This is the actual kind of host rectangle returned by --probe.
+        host = Rect(2560, 0, 3448, 1080)
+        work = Rect(2560, 0, 4480, 1040)
+        x, y = follow_position(host, 86, 86, work)
+        self.assertEqual((x, y), (2773, 839))
+        self.assertLess(x, host.right)
+        self.assertGreater(y, 700)
+
+    def test_hide_until_motion_settles(self):
+        watch = PetMotionTracker(settle_seconds=0.55)
+        rect = Rect(2560, 0, 3448, 1080)
+        moved = Rect(2580, 0, 3468, 1080)
+        self.assertFalse(watch.should_show(rect, 42, 1.0))
+        self.assertFalse(watch.should_show(rect, 42, 1.3))
+        self.assertTrue(watch.should_show(rect, 42, 1.56))
+        self.assertFalse(watch.should_show(moved, 42, 1.60))
+        self.assertFalse(watch.should_show(moved, 42, 1.95))
+        self.assertTrue(watch.should_show(moved, 42, 2.18))
+        # A newly opened native HWND must not inherit "settled".
+        self.assertFalse(watch.should_show(moved, 43, 2.2))
+        watch.reset()
+        self.assertFalse(watch.should_show(moved, 43, 2.3))
 
     def test_negative_monitor_coordinates(self):
         area = Rect(-1920, 0, 0, 1080)
