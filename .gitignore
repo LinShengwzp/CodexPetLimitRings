@@ -6,3 +6,6 @@ __pycache__/
 *.log
 settings.json
 .env
+
+# Per-user customizable appearance (copy from config.example.json)
+config.json
