@@ -34,6 +34,22 @@ DEFAULT = {
         "borderWidth": 0,
         "padding": 8,
     },
+    "glass": {
+        "enabled": True,
+        "fillColor": "#f7f2ff",
+        "fillOpacity": 56,
+        "shadowColor": "#2d244d",
+        "shadowOpacity": 24,
+        "shadowBlur": 8,
+        "shadowSpread": 1,
+        "shadowOffsetX": 1,
+        "shadowOffsetY": 3,
+        "rimColor": "#ffffff",
+        "rimOpacity": 74,
+        "highlightColor": "#ffffff",
+        "highlightOpacity": 35,
+        "outerMargin": 2,
+    },
     "text": {
         "fontFamily": "Segoe UI",
         "fontSize": 12,
@@ -112,6 +128,22 @@ def normalize(data: Any) -> dict:
         conf["background"][key] = _color(bg.get(key), conf["background"][key])
     conf["background"]["borderWidth"] = _number(bg.get("borderWidth"), 0, 12, conf["background"]["borderWidth"])
     conf["background"]["padding"] = _number(bg.get("padding"), 0, 30, conf["background"]["padding"])
+
+    glass = _section(data, "glass")
+    if isinstance(glass.get("enabled"), bool):
+        conf["glass"]["enabled"] = glass["enabled"]
+    for key in ("fillColor", "shadowColor", "rimColor", "highlightColor"):
+        conf["glass"][key] = _color(glass.get(key), conf["glass"][key])
+    for key in ("fillOpacity", "shadowOpacity", "rimOpacity", "highlightOpacity"):
+        conf["glass"][key] = _number(glass.get(key), 0, 100, conf["glass"][key])
+    for key, low, high in (
+        ("shadowBlur", 1, 24),
+        ("shadowSpread", 0, 20),
+        ("shadowOffsetX", -20, 20),
+        ("shadowOffsetY", -20, 20),
+        ("outerMargin", 0, 12),
+    ):
+        conf["glass"][key] = _number(glass.get(key), low, high, conf["glass"][key])
 
     t = _section(data, "text")
     if isinstance(t.get("fontFamily"), str) and 1 <= len(t["fontFamily"]) <= 100:
