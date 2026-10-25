@@ -13,6 +13,7 @@ from dataclasses import dataclass
 
 from .core import Rect
 from .state import PetPlacement, read_pet_placement
+from .uia import UIAMascotWatcher
 
 
 @dataclass(frozen=True)
@@ -114,6 +115,7 @@ class PetLocator:
         self.dwm = ctypes.windll.dwmapi
         self._last_lookup_at = 0.0
         self._last_pet: Pet | None = None
+        self._uia = UIAMascotWatcher()
         self.proc_type = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
 
         def sig(func, argtypes, restype):
@@ -227,12 +229,20 @@ class PetLocator:
         matches.sort(reverse=True)
         score, handle, host, process = matches[0]
         sprite, precise, source = sprite_from_host(host, placement)
+        uia_rect = self._uia.get(handle)
+        if uia_rect is not None:
+            sprite, precise, source = uia_rect, True, "uia-image"
         pet = Pet(
             handle=handle, rect=sprite, host_rect=host,
             work_area=self._work_area(handle, sprite), dpi=self._dpi(handle),
             process=process, precise=precise, source=source,
         )
+        diagnostics["uia_image_available"] = uia_rect is not None
+        diagnostics["uia_mascot_rect"] = uia_rect.__dict__ if uia_rect else None
         return pet, diagnostics
+
+    def close(self) -> None:
+        self._uia.close()
 
     def find(self) -> Pet | None:
         # Parsing a potentially large global-state JSON and enumerating all
