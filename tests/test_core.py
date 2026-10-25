@@ -1,6 +1,8 @@
 import unittest
 
 from rings.core import PetMotionTracker, Quota, Quotas, Rect, follow_position, parse_quotas, explain
+from rings.state import parse_pet_placement
+from rings.pet import host_score, sprite_from_host
 
 
 class QuotaTests(unittest.TestCase):
@@ -52,19 +54,64 @@ class QuotaTests(unittest.TestCase):
 
     def test_relative_position_flips_and_clamps(self):
         area = Rect(0, 0, 800, 600)
-        self.assertEqual(follow_position(Rect(650, 100, 750, 300), 120, 70, area), (522, 165))
-        self.assertEqual(follow_position(Rect(150, 100, 250, 300), 120, 70, area), (258, 165))
+        self.assertEqual(follow_position(Rect(650, 100, 750, 300), 120, 70, area), (520, 124))
+        self.assertEqual(follow_position(Rect(150, 100, 250, 300), 120, 70, area), (20, 124))
         self.assertEqual(follow_position(Rect(650, 100, 750, 300), 120, 70, area, 900, -500), (680, 0))
 
 
-    def test_large_codex_host_default_near_lower_left(self):
-        # This is the actual kind of host rectangle returned by --probe.
-        host = Rect(2560, 0, 3448, 1080)
+    def test_real_codex_sprite_not_huge_host(self):
+        # The user observed this 888x1080 host: its full rect is NOT the pet.
+        state = {
+            "electron-avatar-overlay-open": True,
+            "electron-avatar-overlay-bounds": {
+                "x": 3632, "y": 0,
+                "displayId": "secondary",
+                "byDisplayId": {"secondary": {
+                    "width": 848, "height": 1080,
+                    "mascot": {"left": 648, "top": 764, "width": 146, "height": 178}
+                }}
+            }
+        }
+        placement = parse_pet_placement(state)
+        self.assertIsNotNone(placement)
+        self.assertTrue(placement.has_mascot_geometry)
+        self.assertEqual(placement.mascot, Rect(4280, 764, 4426, 942))
+        host = Rect(3632, 0, 4480, 1080)
+        self.assertIsNotNone(host_score(host, 0x00080080, placement))
+        sprite, precise, source = sprite_from_host(host, placement)
+        self.assertTrue(precise)
+        self.assertEqual(sprite, placement.mascot)
         work = Rect(2560, 0, 4480, 1040)
-        x, y = follow_position(host, 86, 86, work)
-        self.assertEqual((x, y), (2773, 839))
-        self.assertLess(x, host.right)
-        self.assertGreater(y, 700)
+        x, y = follow_position(sprite, 86, 86, work)
+        self.assertEqual((x, y), (4184, 785))
+        self.assertLess(x, sprite.left)
+
+    def test_main_display_wide_host_is_detected(self):
+        state = {
+            "electron-avatar-overlay-open": True,
+            "electron-avatar-overlay-bounds": {
+                "x": 100, "y": 100, "width": 260, "height": 320,
+                "mascot": {"left": 40, "top": 50, "width": 135, "height": 140}
+            },
+        }
+        placement = parse_pet_placement(state)
+        self.assertEqual(placement.mascot, Rect(140, 150, 275, 290))
+        # Unlike V1, a 1920px wide transparent host must not be discarded.
+        host = Rect(0, 0, 1920, 1080)
+        self.assertIsNotNone(host_score(host, 0x00080000, placement))
+        sprite, precise, _ = sprite_from_host(host, placement)
+        self.assertTrue(precise)
+        self.assertEqual(sprite, placement.mascot)
+
+    def test_state_closed_and_missing_mascot(self):
+        self.assertIsNone(parse_pet_placement({"electron-avatar-overlay-open": False}))
+        data = {"electron-avatar-overlay-open": True,
+                "electron-avatar-overlay-bounds": {"x": 120, "y": 310, "width": 240, "height": 200}}
+        p = parse_pet_placement(data)
+        self.assertIsNotNone(p)
+        self.assertFalse(p.has_mascot_geometry)
+        self.assertEqual(p.mascot, Rect(120, 310, 248, 449))
+        self.assertIsNone(host_score(Rect(0, 0, 1920, 1080), 0, p))  # opaque main app excluded
 
     def test_hide_until_motion_settles(self):
         watch = PetMotionTracker(settle_seconds=0.55)
