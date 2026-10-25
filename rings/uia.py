@@ -80,12 +80,9 @@ class UIAMascotWatcher:
                 proc.terminate()
             except OSError:
                 pass
-        # Avoid waiting synchronously for any slow UIA call.
-        try:
-            if proc.stdout:
-                proc.stdout.close()
-        except OSError:
-            pass
+        # Do not close stdout here while a reader thread is blocked on it:
+        # on Windows close() can wait for the blocking read to complete.
+        # Terminating the child releases its pipe and reader naturally.
 
     def close(self) -> None:
         with self._lock:
