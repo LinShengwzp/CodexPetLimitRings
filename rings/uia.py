@@ -46,6 +46,7 @@ class UIAMascotWatcher:
         self._process: subprocess.Popen | None = None
         self._hwnd: int | None = None
         self._last_box: Rect | None = None
+        self._last_status = "pending"
         self._last_update: float = 0.0
         self._restart_after: float = 0.0
         self._lock = threading.Lock()
@@ -57,12 +58,21 @@ class UIAMascotWatcher:
                 return
             for line in process.stdout:
                 box = parse_uia_line(line, hwnd)
+                try:
+                    message = json.loads(line)
+                    reported = message.get("status") if isinstance(message, dict) else None
+                except ValueError:
+                    reported = None
+                status = "present" if box is not None else (
+                    "absent" if reported == "not_found" else "unavailable"
+                )
                 with self._lock:
                     if process is not self._process or self._hwnd != hwnd:
                         break
                     # A not_found result invalidates previous position; do
                     # not continue rendering at the old sprite coordinates.
                     self._last_box = box
+                    self._last_status = status
                     self._last_update = time.monotonic()
         except (OSError, UnicodeError):
             pass
@@ -72,6 +82,7 @@ class UIAMascotWatcher:
         self._process = None
         self._hwnd = None
         self._last_box = None
+        self._last_status = "pending"
         self._last_update = 0.0
         if proc is None:
             return
@@ -118,8 +129,12 @@ class UIAMascotWatcher:
             self._process = None
             self._hwnd = None
 
-    def get(self, hwnd: int) -> Rect | None:
-        """Return fresh mascot bounds immediately, or None while starting."""
+    def observe(self, hwnd: int) -> tuple[str, Rect | None]:
+        """Report 'present', 'absent', 'pending', 'unavailable' or 'stale'.
+
+        A verified 'absent' state is authoritative: the transparent Chromium
+        host can remain alive even after its pet image has been hidden.
+        """
         with self._lock:
             now = time.monotonic()
             if (self._process is not None
@@ -130,6 +145,14 @@ class UIAMascotWatcher:
                 self._start(hwnd)
                 if self._process is None:
                     self._restart_after = now + 5.0
-            if self._hwnd != hwnd or now - self._last_update > self.fresh_seconds:
-                return None
-            return self._last_box
+            if self._hwnd != hwnd:
+                return "pending", None
+            if not self._last_update:
+                return "pending", None
+            if now - self._last_update > self.fresh_seconds:
+                return "stale", None
+            return self._last_status, self._last_box
+
+    def get(self, hwnd: int) -> Rect | None:
+        status, rect = self.observe(hwnd)
+        return rect if status == "present" else None
