@@ -25,7 +25,8 @@ def cli() -> int:
     parser = argparse.ArgumentParser(description="Attach two quota rings to Codex's native Mini/Pet.")
     parser.add_argument("--demo", action="store_true", help="preview 41/91 rings beside the pet or pointer without querying Codex")
     parser.add_argument("--once", action="store_true", help="print subscription quota JSON and exit")
-    parser.add_argument("--probe", action="store_true", help="inspect the native Codex Pet window")
+    parser.add_argument("--probe", action="store_true", help="inspect live mascot position and native host window")
+    parser.add_argument("--diagnose", action="store_true", help="show sanitized Codex window candidates and saved pet geometry")
     options = parser.parse_args()
 
     if os.name != "nt" and not options.once:
@@ -45,18 +46,24 @@ def cli() -> int:
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0
 
-    if options.probe:
+    if options.probe or options.diagnose:
         from rings.pet import PetLocator
-        pet = PetLocator().find()
+        pet, details = PetLocator().inspect(diagnostic=options.diagnose)
+        output = {
+            "found": pet is not None,
+            "mascot_rect": pet.rect.__dict__ if pet else None,
+            "host_rect": pet.host_rect.__dict__ if pet else None,
+            "position_source": pet.source if pet else None,
+            "precise_mascot_geometry": pet.precise if pet else None,
+            "hwnd": pet.handle if pet else None,
+            "dpi": pet.dpi if pet else None,
+            "monitor_work_area": pet.work_area.__dict__ if pet else None,
+            "saved_codex_state": details,
+        }
+        print(json.dumps(output, ensure_ascii=False, indent=2))
         if pet is None:
-            print("未检测到原生 Pet 窗口，请先在 Codex Desktop 中打开 Mini / Pet。")
-            return 1
-        print(json.dumps({
-            "hwnd": pet.handle, "rect": pet.rect.__dict__,
-            "dpi": pet.dpi, "process": pet.process,
-            "monitor_work_area": pet.work_area.__dict__,
-        }, ensure_ascii=False, indent=2))
-        return 0
+            print("未检测到可验证的 Pet 宿主窗口。可分享上面的诊断结果（不含凭据或窗口标题）。", file=sys.stderr)
+        return 0 if pet else 1
 
     # Do not allow accidental double launch of the overlay.
     mutex = None
