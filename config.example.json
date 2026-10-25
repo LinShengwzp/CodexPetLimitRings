@@ -39,5 +39,14 @@
     "offsetX": 0,
     "offsetY": 0,
     "settleMs": 600
+  },
+  "animation": {
+    "enabled": true,
+    "fadeInMs": 220,
+    "fadeOutMs": 130,
+    "frameMs": 33
+  },
+  "visibility": {
+    "requireUIA": true
   }
 }
