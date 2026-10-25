@@ -127,6 +127,7 @@ class PetLocator:
         sig(self.user32.GetClassNameW, (wintypes.HWND, wintypes.LPWSTR, ctypes.c_int), ctypes.c_int)
         sig(self.dwm.DwmGetWindowAttribute, (wintypes.HWND, wintypes.DWORD, ctypes.c_void_p, wintypes.DWORD), ctypes.c_long)
         sig(self.user32.MonitorFromWindow, (wintypes.HWND, wintypes.DWORD), wintypes.HMONITOR)
+        sig(self.user32.MonitorFromPoint, (wintypes.POINT, wintypes.DWORD), wintypes.HMONITOR)
         sig(self.user32.GetMonitorInfoW, (wintypes.HMONITOR, ctypes.POINTER(_MONITORINFO)), wintypes.BOOL)
         sig(self.kernel32.OpenProcess, (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD), wintypes.HANDLE)
         sig(self.kernel32.QueryFullProcessImageNameW, (
@@ -162,8 +163,14 @@ class PetLocator:
             return None
         return Rect(raw.left, raw.top, raw.right, raw.bottom)
 
-    def _work_area(self, hwnd) -> Rect:
-        monitor = self.user32.MonitorFromWindow(hwnd, 2)
+    def _work_area(self, hwnd, sprite: Rect | None = None) -> Rect:
+        # A full-height transparent host can straddle displays. The monitor
+        # containing the actual *sprite* is the one that should clamp the HUD.
+        if sprite is not None:
+            center = wintypes.POINT((sprite.left + sprite.right) // 2, (sprite.top + sprite.bottom) // 2)
+            monitor = self.user32.MonitorFromPoint(center, 2)
+        else:
+            monitor = self.user32.MonitorFromWindow(hwnd, 2)
         info = _MONITORINFO()
         info.cbSize = ctypes.sizeof(info)
         if monitor and self.user32.GetMonitorInfoW(monitor, ctypes.byref(info)):
@@ -222,7 +229,7 @@ class PetLocator:
         sprite, precise, source = sprite_from_host(host, placement)
         pet = Pet(
             handle=handle, rect=sprite, host_rect=host,
-            work_area=self._work_area(handle), dpi=self._dpi(handle),
+            work_area=self._work_area(handle, sprite), dpi=self._dpi(handle),
             process=process, precise=precise, source=source,
         )
         return pet, diagnostics
