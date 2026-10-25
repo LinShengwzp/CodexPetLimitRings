@@ -66,9 +66,18 @@ def sprite_from_anchor(host: Rect, anchor: Any) -> Rect | None:
     return Rect(cx - width // 2, cy - height // 2, cx - width // 2 + width, cy - height // 2 + height)
 
 
-def move_anchor(anchor: dict, dx: int, dy: int) -> dict:
-    """Follow native avatar mouse drag even when host HWND never moves."""
+def move_anchor(
+    anchor: dict, dx: int, dy: int, *,
+    host_dx: int = 0, host_dy: int = 0,
+) -> dict:
+    """Translate an avatar by cursor delta without double-counting host motion.
+
+    The calibrated avatar center is (host.right - rightInset,
+    host.bottom - bottomInset). Therefore the new inset must change by
+    host_delta - cursor_delta. When host and mouse both move 215 px, the
+    inset must stay constant, not move another 215 px.
+    """
     updated = dict(anchor)
-    updated["rightInset"] = int(anchor["rightInset"]) - dx
-    updated["bottomInset"] = int(anchor["bottomInset"]) - dy
+    updated["rightInset"] = int(anchor["rightInset"]) + host_dx - dx
+    updated["bottomInset"] = int(anchor["bottomInset"]) + host_dy - dy
     return updated
