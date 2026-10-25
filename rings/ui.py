@@ -26,8 +26,12 @@ COLOR_KEY = "#010203"
 
 
 class RingWidget:
-    def __init__(self, *, demo: bool = False):
+    def __init__(self, *, demo: bool = False, position_tracer=None):
         self.demo = demo
+        self.position_tracer = position_tracer
+        self.raw_pet: Pet | None = None
+        self._ring_target: tuple[int, int] | None = None
+        self._trace_reason = "initializing"
         self.root = tk.Tk()
         self.root.withdraw()
         self.root.title("Codex Pet Limit Rings")
@@ -177,6 +181,61 @@ class RingWidget:
             font=(text["fontFamily"], -max(7, round(text["fontSize"] * scale)), weight),
         )
 
+    def _trace_position(self, event: str = "sample", *, force: bool = False) -> None:
+        """Observe both requested geometry and Tk's displayed geometry.
+
+        Important: actual dragon sprite pixels are *not* observed here.
+        raw_mascot is Codex state or host approximation; effective_mascot
+        includes our manual calibration and cursor-drag predictions.
+        """
+        if self.position_tracer is None:
+            return
+        raw = self.raw_pet
+        pet = self.pet
+        visible = self.root.state() != "withdrawn"
+        target = self._ring_target
+        window = (
+            (self.root.winfo_rootx(), self.root.winfo_rooty(), self.root.winfo_width(), self.root.winfo_height())
+            if visible else None
+        )
+        mouse_x, mouse_y = self.root.winfo_pointerxy()
+        config_pos = self.config["position"]
+        key = self._monitor_key(pet) if pet is not None else None
+        anchor = self.calibrations.get(key) if key else None
+        if not isinstance(anchor, dict):
+            anchor = None
+        rect = lambda r: [r.left, r.top, r.right, r.bottom] if r is not None else None
+        fields = {
+            "reason": self._trace_reason,
+            "visible": visible,
+            "pet_hwnd": raw.handle if raw else None,
+            "position_source": pet.source if pet else None,
+            "position_precise": pet.precise if pet else None,
+            "host_rect": rect(raw.host_rect) if raw else None,
+            "raw_mascot_rect": rect(raw.rect) if raw else None,
+            "effective_mascot_rect": rect(pet.rect) if pet else None,
+            "monitor_work_area": rect(pet.work_area) if pet else None,
+            "dpi": pet.dpi if pet else None,
+            "ring_target_rect": ([target[0], target[1], target[0] + self.width, target[1] + self.height]
+                                 if target is not None else None),
+            "ring_window_observed": list(window) if window is not None else None,
+            "ring_size": [self.width, self.height],
+            "ring_drag_offset": [self.offset_x, self.offset_y],
+            "config_offset": [config_pos["offsetX"], config_pos["offsetY"]],
+            "config_anchor": [config_pos["side"], config_pos["gap"], config_pos["verticalRatio"]],
+            "calibration_active": anchor is not None,
+            "calibration_insets": {
+                "rightInset": anchor.get("rightInset"),
+                "bottomInset": anchor.get("bottomInset"),
+            } if anchor else None,
+            "mouse_xy": [mouse_x, mouse_y],
+            "left_mouse_down": self._mouse_pressed(),
+            "pet_drag_tracking": self.pet_drag is not None,
+            "ring_dragging": self.drag_origin is not None,
+            "calibration_pending": self.calibration_pending,
+        }
+        self.position_tracer.emit(event, fields, force=force)
+
     def _monitor_key(self, pet: Pet) -> str:
         area = pet.work_area
         return f"{area.left},{area.top},{area.right},{area.bottom}"
@@ -268,7 +327,10 @@ class RingWidget:
             except Exception as exc:
                 raw_pet = None
                 self.error = f"Codex Pet 检测失败：{exc}"
+            self.raw_pet = raw_pet
             if raw_pet is None:
+                self._trace_reason = "pet_not_found"
+                self._ring_target = None
                 self.motion.reset()
                 self.pet = None
                 self.pet_drag = None
@@ -301,8 +363,15 @@ class RingWidget:
                     gap=position["gap"],
                     vertical_ratio=position["verticalRatio"],
                 )
+                self._ring_target = (x, y)
                 settled = self.motion.should_show(effective_pet.rect, effective_pet.handle, now)
                 moving = pet_dragging or now < self.pet_drag_settle_until
+                self._trace_reason = (
+                    "pet_drag" if pet_dragging else
+                    "drag_release_settling" if moving else
+                    "host_or_mascot_settling" if not settled else
+                    "visible"
+                )
                 if not self.demo and (not settled or moving):
                     if self.root.state() != "withdrawn":
                         self._hide_tip()
@@ -312,6 +381,9 @@ class RingWidget:
                     if self.root.state() == "withdrawn":
                         self.root.deiconify()
                         self.root.wm_attributes("-topmost", True)
+        if self.drag_origin is not None:
+            self._trace_reason = "ring_drag"
+        self._trace_position()
         self.root.after(100, self._tick)
 
     def refresh(self) -> None:
@@ -348,12 +420,17 @@ class RingWidget:
                 self.offset_x + p["offsetX"], self.offset_y + p["offsetY"],
                 side=p["side"], gap=p["gap"], vertical_ratio=p["verticalRatio"],
             )
+            self._ring_target = (px, py)
             self.root.geometry(f"{self.width}x{self.height}{px:+d}{py:+d}")
+        self._trace_reason = "ring_drag"
+        self._trace_position("ring_drag", force=True)
 
     def _end_drag(self, _event) -> None:
         if self.drag_origin is not None:
             self.drag_origin = None
             write_settings({"layoutVersion": 4, "offsetX": self.offset_x, "offsetY": self.offset_y})
+            self._trace_reason = "ring_drag_released"
+            self._trace_position("ring_drag_end", force=True)
 
     def _detail_lines(self) -> list[str]:
         five = self.values.five_hour
@@ -399,6 +476,8 @@ class RingWidget:
         if self.calibration_pending:
             return
         self.calibration_pending = True
+        self._trace_reason = "calibration_started"
+        self._trace_position("calibration_start", force=True)
         self._hide_tip()
         self.root.after(5000, self._finish_calibration)
 
@@ -427,6 +506,9 @@ class RingWidget:
             self.error = ""
         except (OSError, ValueError, TypeError) as exc:
             self.error = f"校准失败：{exc}"
+        finally:
+            self._trace_reason = "calibration_finished"
+            self._trace_position("calibration_end", force=True)
 
     def _clear_calibration(self) -> None:
         if self.pet is not None:
@@ -434,6 +516,8 @@ class RingWidget:
             self.calibrations.pop(key, None)
             write_settings({"calibrations": self.calibrations})
             self.motion.reset()
+            self._trace_reason = "calibration_cleared"
+            self._trace_position("calibration_cleared", force=True)
 
     def _show_menu(self, event) -> None:
         self._hide_tip()
@@ -458,6 +542,8 @@ class RingWidget:
             menu.grab_release()
 
     def close(self) -> None:
+        self._trace_reason = "exit"
+        self._trace_position("exit", force=True)
         self._hide_tip()
         self.root.destroy()
 
