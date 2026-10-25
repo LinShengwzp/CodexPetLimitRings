@@ -9,3 +9,6 @@ settings.json
 
 # Per-user customizable appearance (copy from config.example.json)
 config.json
+
+# Optional local movement trace (screen geometry only)
+logs/
