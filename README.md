@@ -98,6 +98,47 @@ notepad .\config.json
 - 移动隐藏可识别 Codex 保存的位置变化，也会检测在龙娘区域内按住鼠标左键拖动；普通内部动画和未写入 UI 状态的程序化运动可能仍无法检测。
 - V1/V2/V3 的旧偏移不会自动迁移；校准并拖动后保存新的 V4 布局。
 
+## 实时位置跟踪（排查移动不同步）
+
+额度显示本身不受影响。排查坐标问题时，**请先退出正在运行的圆环**，然后运行：
+
+```powershell
+python main.py --trace-positions
+
+# 更密集采样可选（默认 0.5 秒，最低 0.2 秒）
+python main.py --trace-positions --trace-interval 0.3
+```
+
+程序运行时会在 **PowerShell 实时输出一行 JSON**，同时保存到项目的 `logs/positions-YYYYMMDD-HHMMSS.jsonl`（最大约 2MB，自动轮转）。不想查看日志时，仍使用普通的 `python main.py`。如果用 `start.cmd` / `pythonw` 启动，终端日志不可见，建议先用上面的命令调试。
+
+主要字段：
+
+| 字段 | 含义 |
+|---|---|
+| `host_rect` | Codex 原生透明宿主的 `[left,top,right,bottom]`，不等于小龙娘真实外形 |
+| `raw_mascot_rect` | 当前探测器得到的角色矩形，可能只是估算 |
+| `effective_mascot_rect` | **套用手动校准与鼠标拖动推断后**，用于计算圆环的角色矩形 |
+| `position_source` | 定位来源，如 `approximate-host-corner` / `manually-calibrated` |
+| `ring_target_rect` | 经过位置算法得到的圆环目标矩形 |
+| `ring_window_observed` | Tk 当前观察到的实际窗口 `[x,y,width,height]`；隐藏时为 `null` |
+| `visible` / `reason` | 是否显示及隐藏原因（例如 `pet_drag`、`host_or_mascot_settling`） |
+| `mouse_xy` / `left_mouse_down` | 当前鼠标位置和左键状态 |
+| `pet_drag_tracking` | 是否识别为正在拖动小龙娘 |
+| `calibration_active` / `calibration_insets` | 本显示器校准是否生效及相对宿主的偏移 |
+| `ring_drag_offset` / `config_offset` | 手动拖动和 JSON 配置带来的两套额外偏移 |
+
+鼠标从小龙娘身上按住并移动时，观察 `mouse_xy`、`pet_drag_tracking`、`effective_mascot_rect` 是否一起改变。若 `mouse_xy` 已经变化，但 `pet_drag_tracking=false`，说明拖动入口的命中区域未匹配；若角色坐标已变化但 `ring_target_rect` 不变化，则继续检查位置算法。
+
+可以在另一窗口查看最新日志：
+
+```powershell
+Get-Content (Get-ChildItem .\logs\positions-*.jsonl |
+  Sort-Object LastWriteTime -Descending |
+  Select-Object -First 1).FullName -Tail 15 -Wait
+```
+
+**分享日志前请注意**：只记录窗口、坐标、鼠标位置和显隐状态，不采集登录凭据、提示词或窗口标题；但日志会显示你的屏幕布局及鼠标运动轨迹，不建议公开发布完整原始文件。
+
 ## 诊断与测试
 
 ```powershell
