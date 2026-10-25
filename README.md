@@ -7,6 +7,7 @@
 - 使用 Codex **App Server** 的只读 `account/rateLimits/read`，**不读取 `auth.json` 或复制令牌**。
 - 默认每 60 秒刷新；右键查看重置时间、立即刷新、重置位置、退出。
 - 适配 Windows 10/11 的透明窗口、多显示器和 DPI。
+- **外观配置完全外置**：两个圆环的直径、粗细、颜色、底色、背景、字体和跟随位置；修改 `config.json` 后约 1 秒自动重新加载。
 - 没拿到数据时显示 `--`，而不是编造 0% 或 100%。
 
 > 当前仍是轻量实验版。目标是一个安静的小装饰，**不会额外显示第二只宠物**。这是独立非官方项目。
@@ -43,9 +44,51 @@ python main.py
 - **退出**：右键 → 退出（不会关闭 Codex）。
 - **重新打开**：再次运行 `python main.py`；程序不自动注册 Windows 启动项。
 
-设置文件：`%LOCALAPPDATA%\CodexPetLimitRings\settings.json`。
+个人位置/校准文件：`%LOCALAPPDATA%\CodexPetLimitRings\settings.json`。
+可编辑的外观配置：项目根目录 `config.json`（见下）。
 
 圆环不会代替 Codex 对额度的真实判断。仅当 App Server 返回了**准确的 300 / 10080 分钟窗口**时，才分别标为 5h / 7d；缺失数据将显示 `--`。
+
+## V4：校准真实角色位置与自定义外观
+
+**为什么要校准？** 在某些 Codex Desktop 版本中，`--probe` 返回的只是覆盖整个屏幕高度的透明宿主窗口，且 `saved_codex_state.state_open_with_bounds=false`。此时操作系统无法告诉我们小龙娘在宿主的上半部分还是下半部分，程序应显示 `approximate-host-corner`，**绝不将估算冒充精确位置**。
+
+校准方法：
+
+1. 先右键圆环 → **校准小龙娘位置（5 秒内把鼠标移到她的中心）**。
+2. 点击该菜单后，把鼠标移到小龙娘身体中心并停住，**不需要点击**，5 秒后自动记住位置。
+3. 再拖动圆环微调相对间距。校准数据按显示器工作区分别保存。
+4. 校准后可识别从小龙娘身上开始的鼠标拖拽，即使透明宿主窗口自身不动，也会记录鼠标位移并在停止后重新显示。角色自行播放动画、Codex 内部未写入状态的位移仍不保证能追踪。
+
+如果暂时无法找到圆环，可先运行 `python main.py --demo` 预览；如果主屏 `--probe` 仍未找到宿主，请用 `python main.py --diagnose` 查看为什么没有匹配候选，避免盲目修改坐标。
+
+**自定义外观**，在项目根目录运行：
+
+```powershell
+Copy-Item .\config.example.json .\config.json
+notepad .\config.json
+```
+
+`config.json` 不受 Git 跟踪，后续 `git pull` 不会覆盖。保存后运行中的桌宠约 1 秒内自动生效，无需重启。
+
+配置字段速查：
+
+| 字段 | 功能 |
+|---|---|
+| `rings.outer.diameter / stroke / color` | 5 小时外环的直径（像素）、线宽和颜色 |
+| `rings.inner.diameter / stroke / color` | 每周内环的直径、线宽和颜色 |
+| `rings.trackColor` | 未使用进度部分的底色 |
+| `rings.warningColor / criticalColor / unknownColor` | 低额度 / 极低额度 / 数据未知时使用的颜色 |
+| `background.enabled` | 是否绘制圆形背景，默认为 `false`（透明） |
+| `background.color / borderColor / borderWidth / padding` | 背景颜色、描边和留白 |
+| `text.fontFamily / fontSize / bold / color` | 中心数字字体、大小、粗细和颜色 |
+| `text.separator / showPercentSign` | `41/91` 分隔符和百分号显示 |
+| `position.side / gap / verticalRatio` | 优先贴角色左侧或右侧、距离和纵向对齐位置 |
+| `position.offsetX / offsetY / settleMs` | 额外偏移和移动后恢复显示的等待时间 |
+
+注意：Tkinter 的普通画布背景只支持**全透明**或**不透明实色**，本版不支持单独设置背景半透明度。颜色请输入 `#RRGGBB`。非常极端的环大小会被配置校验限制为合理范围。
+
+`--probe` 现在还会报告 `codex_state_file`（仅文件位置、是否存在和与宠物有关的字段名），不会打印 Codex 凭据。如果返回 `manual_calibration_active=true`，表示已采用人工校准的角色坐标。
 
 ## V2 同心双环说明
 
@@ -53,7 +96,7 @@ python main.py
 - `python main.py --demo`：如果已检测到原生宠物，靠近宠物位置预览；否则在当前鼠标附近预览（可将鼠标放在副屏再运行）。模拟数据不会更改账户额度。
 - 定位已改为解析 `%USERPROFILE%\.codex\.codex-global-state.json` 中的 `electron-avatar-overlay-bounds`，优先读取当前显示器对应的 `mascot` 细分几何信息。原生可见窗口用来验证当前状态，避免误认历史残留位置。此文件是 Codex UI 状态，不是登录凭据。若不含 `mascot` 数据，结果会明确标记为近似位置。
 - 移动隐藏可识别 Codex 保存的位置变化，也会检测在龙娘区域内按住鼠标左键拖动；普通内部动画和未写入 UI 状态的程序化运动可能仍无法检测。
-- V1/V2 的偏移不会自动迁移，因为参考位置已变化；第一次拖动或右键「恢复默认位置」会保存 V3 布局位置。
+- V1/V2/V3 的旧偏移不会自动迁移；校准并拖动后保存新的 V4 布局。
 
 ## 诊断与测试
 
@@ -80,7 +123,9 @@ Codex 桌面安装 / 更新、宠物窗口属性变化可能影响探测，请�
 - `rings/bridge.py`：Codex App Server 只读连接与超时处理。
 - `rings/pet.py`：Windows 原生窗口验证、角色坐标选择、多显示器工作区。
 - `rings/state.py`：只读解析 Codex 原生 Mini 的 UI 坐标和 mascot 信息。
-- `rings/ui.py`：Tkinter 双圆环透明浮层、拖动、刷新、提示。
+- `rings/ui.py`：Tkinter 双圆环透明浮层、拖动、刷新、提示和校准。
+- `rings/config.py`：外观配置验证与自动重新加载。
+- `rings/calibration.py`：每屏手动校准与本地位置保存。
 - `main.py`：启动、预览、诊断入口。
 
 ## 设计参考
@@ -92,5 +137,5 @@ Codex 桌面安装 / 更新、宠物窗口属性变化可能影响探测，请�
 ## 已知限制
 
 - 只能在 Windows 桌面运行；没有原生宠物时默认隐藏（`--demo` 除外）。
-- GitHub CI 校验 Python 编译、额度解析、跟随位置与移动检测；**真实 Windows 桌面位置、DPI、拖动及动画显隐仍需要 ANMI-SERVER 实机验收**。
+- GitHub CI 校验 Python 编译、额度解析、主题配置、手动校准和移动检测；**真实 Windows 桌面位置、DPI、拖动及动画显隐仍需要 ANMI-SERVER 实机验收**。
 - Codex 或 Windows 以后修改窗口类型、UI 状态字段时，可能需要调整识别条件。**真实桌面跟随仍待你的主副屏实测**；若无法找到有效宿主窗口，程序宁可隐藏并让 `--diagnose` 报告原因，不假装已经跟随。
