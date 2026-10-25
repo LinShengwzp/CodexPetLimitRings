@@ -6,7 +6,9 @@ query runs off the Tk thread and never uses user tokens.
 """
 from __future__ import annotations
 
+import base64
 import ctypes
+import json
 import os
 import queue
 import threading
@@ -18,6 +20,7 @@ from .calibration import (
     create_anchor, move_anchor, read_settings, sprite_from_anchor, write_settings,
 )
 from .config import ConfigWatcher
+from .glass import render_glass_png
 from .core import PetMotionTracker, Quota, Quotas, Rect, follow_position
 from .pet import Pet, PetLocator
 from .transition import OpacityTransition
@@ -79,6 +82,8 @@ class RingWidget:
         )
         self.width = 1
         self.height = 1
+        self._glass_photo: tk.PhotoImage | None = None
+        self._glass_cache_key = None
         self.canvas = tk.Canvas(
             self.root, bg=COLOR_KEY, bd=0, highlightthickness=0,
             cursor="fleur",
@@ -168,6 +173,16 @@ class RingWidget:
         scale = max(0.8, min(2.3, self.dpi / 96.0))
         outer = style["rings"]["outer"]["diameter"]
         pad = style["background"]["padding"]
+        if style["glass"]["enabled"]:
+            glass = style["glass"]
+            # Reserve room for the soft shadow beyond the outer stroke.
+            shadow_padding = (
+                glass["outerMargin"] + glass["shadowSpread"]
+                + glass["shadowBlur"] * 1.5
+                + max(abs(glass["shadowOffsetX"]), abs(glass["shadowOffsetY"]))
+                + 2
+            )
+            pad = max(pad, shadow_padding)
         self.width = self.height = round((outer + 2 * pad) * scale)
         self.canvas.config(width=self.width, height=self.height)
 
@@ -195,8 +210,40 @@ class RingWidget:
         inner = conf["rings"]["inner"]
         cx = cy = self.width / 2.0
         bg = conf["background"]
-
-        if bg["enabled"]:
+        glass = conf["glass"]
+        if glass["enabled"]:
+            # Pre-render soft edges once per style/DPI change. Drawing a bitmap
+            # each tick would be wasteful and needlessly hurt pet animation.
+            key = (self.width, round(scale, 3), outer["diameter"],
+                   json.dumps(glass, sort_keys=True))
+            if key != self._glass_cache_key:
+                try:
+                    png = render_glass_png(
+                        self.width, outer["diameter"], glass, scale
+                    )
+                    self._glass_photo = tk.PhotoImage(
+                        data=base64.b64encode(png).decode("ascii"),
+                        format="png",
+                        master=self.root,
+                    )
+                    self._glass_cache_key = key
+                except (tk.TclError, ValueError, MemoryError):
+                    # Some Tk/Win32 combinations may not support PNG alpha
+                    # and color-key transparency together. Leave a simpler
+                    # solid tinted backdrop instead of killing the pet.
+                    self._glass_photo = None
+                    self._glass_cache_key = None
+            if self._glass_photo is not None:
+                self.canvas.create_image(cx, cy, image=self._glass_photo)
+            else:
+                self.canvas.create_oval(
+                    cx - outer["diameter"] * scale / 2,
+                    cy - outer["diameter"] * scale / 2,
+                    cx + outer["diameter"] * scale / 2,
+                    cy + outer["diameter"] * scale / 2,
+                    fill=glass["fillColor"], outline=glass["rimColor"],
+                )
+        elif bg["enabled"]:
             margin = max(1, round(bg["borderWidth"] * scale / 2 + 1))
             self.canvas.create_oval(
                 margin, margin, self.width - margin, self.height - margin,
