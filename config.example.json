@@ -48,5 +48,21 @@
   },
   "visibility": {
     "requireUIA": true
+  },
+  "glass": {
+    "enabled": true,
+    "fillColor": "#f7f2ff",
+    "fillOpacity": 56,
+    "shadowColor": "#2d244d",
+    "shadowOpacity": 24,
+    "shadowBlur": 8,
+    "shadowSpread": 1,
+    "shadowOffsetX": 1,
+    "shadowOffsetY": 3,
+    "rimColor": "#ffffff",
+    "rimOpacity": 74,
+    "highlightColor": "#ffffff",
+    "highlightOpacity": 35,
+    "outerMargin": 2
   }
 }
