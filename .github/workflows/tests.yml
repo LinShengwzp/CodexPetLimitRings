@@ -26,8 +26,12 @@ jobs:
         run: |
           $tokens = $null
           $errors = $null
-          [void][System.Management.Automation.Language.Parser]::ParseFile("scripts/PetUiaWatcher.ps1", [ref]$tokens, [ref]$errors)
-          if ($errors.Count -gt 0) {
-            $errors | ForEach-Object { Write-Error $_.Message }
-            exit 1
+          foreach ($script in @("scripts/PetUiaWatcher.ps1", "scripts/Autostart.ps1")) {
+            $tokens = $null
+            $errors = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile($script, [ref]$tokens, [ref]$errors)
+            if ($errors.Count -gt 0) {
+              $errors | ForEach-Object { Write-Error "$script : $($_.Message)" }
+              exit 1
+            }
           }
