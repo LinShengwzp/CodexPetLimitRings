@@ -10,7 +10,7 @@ import tkinter as tk
 from pathlib import Path
 
 from .bridge import read_quotas
-from .core import Quota, Quotas, Rect, follow_position
+from .core import PetMotionTracker, Quota, Quotas, Rect, follow_position
 from .pet import PetLocator
 
 
@@ -64,19 +64,25 @@ class RingWidget:
             pass
 
         self.offset_x, self.offset_y = load_offsets()
-        self.locator = None if demo else PetLocator()
+        # In demo mode, follow the pet when visible; otherwise preview near
+        # the mouse pointer (which may be on a secondary screen).
+        self.locator = PetLocator()
         self.pet = None
-        self.diameter = 52
-        self.spacing = 9
-        self.padding = 7
-        self.width = 2 * self.diameter + self.spacing + 2 * self.padding
-        self.height = self.diameter + 22
+        self.motion = PetMotionTracker(settle_seconds=0.55)
+        self.preview_origin = (
+            self.root.winfo_pointerx() + 22,
+            self.root.winfo_pointery() + 22,
+        )
+        self.diameter = 76
+        self.padding = 5
+        self.width = self.diameter + 2 * self.padding
+        self.height = self.width
         self.canvas = tk.Canvas(
             self.root, width=self.width, height=self.height, bg=COLOR_KEY,
             bd=0, highlightthickness=0, cursor="fleur",
         )
         self.canvas.pack()
-        self.values = Quotas(Quota(53), Quota(93)) if demo else Quotas(Quota(), Quota())
+        self.values = Quotas(Quota(41), Quota(91)) if demo else Quotas(Quota(), Quota())
         self.last_success = time.monotonic() if demo else None
         self.error = ""
         self.events: queue.Queue = queue.Queue()
@@ -96,24 +102,24 @@ class RingWidget:
         self.root.protocol("WM_DELETE_WINDOW", self.close)
 
         if demo:
-            self.root.geometry(f"{self.width}x{self.height}+100+100")
+            x, y = self.preview_origin
+            self.root.geometry(f"{self.width}x{self.height}{x:+d}{y:+d}")
             self.root.deiconify()
         else:
             self.refresh()
-        self.root.after(400, self._tick)
+        self.root.after(100, self._tick)
 
     def _sizes(self, dpi: int) -> None:
-        # Tk is made DPI-aware by main.py. Canvas pixel dimensions are physical.
-        scale = max(0.8, min(2.4, dpi / 96))
-        diameter = round(52 * scale)
-        spacing = round(9 * scale)
-        padding = round(7 * scale)
-        width = 2 * diameter + spacing + 2 * padding
-        height = diameter + round(22 * scale)
-        if (width, height) != (self.width, self.height):
-            self.diameter, self.spacing, self.padding = diameter, spacing, padding
-            self.width, self.height = width, height
-            self.canvas.config(width=width, height=height)
+        # Tk uses physical screen pixels after DPI awareness initialization.
+        scale = max(0.8, min(2.3, dpi / 96.0))
+        diameter = round(76 * scale)
+        padding = round(5 * scale)
+        width = diameter + 2 * padding
+        if width != self.width:
+            self.diameter = diameter
+            self.padding = padding
+            self.width = self.height = width
+            self.canvas.config(width=width, height=width)
             self._render()
 
     def _ring_color(self, quota: Quota, normal: str) -> str:
@@ -128,37 +134,37 @@ class RingWidget:
         return normal
 
     def _render(self) -> None:
+        """Two concentric rings: outer 5h purple, inner weekly blue."""
         self.canvas.delete("all")
         d = self.diameter
-        scale = d / 52
-        for i, (q, label, normal) in enumerate((
-            (self.values.five_hour, "5h", COLOR_5H),
-            (self.values.weekly, "7d", COLOR_WEEK),
-        )):
-            x = self.padding + i * (d + self.spacing)
-            inset = round(4 * scale)
-            self.canvas.create_arc(
-                x + inset, inset, x + d - inset, d - inset,
-                start=0, extent=359.9, style="arc", outline=COLOR_TRACK,
-                width=max(2, round(5 * scale)),
+        p = self.padding
+        scale = d / 76.0
+        center = p + d / 2
+        outer = self.values.five_hour
+        inner = self.values.weekly
+
+        def arc(quota: Quota, normal: str, inset: float, stroke: int) -> None:
+            left = p + round(inset * scale)
+            right = p + d - round(inset * scale)
+            self.canvas.create_oval(
+                left, left, right, right, outline=COLOR_TRACK, width=stroke,
             )
-            color = self._ring_color(q, normal)
-            if q.remaining is not None and q.remaining > 0:
+            if quota.remaining is not None and quota.remaining > 0:
                 self.canvas.create_arc(
-                    x + inset, inset, x + d - inset, d - inset,
-                    start=90, extent=-min(359.9, q.remaining * 3.599),
-                    style="arc", outline=color, width=max(2, round(5 * scale)),
+                    left, left, right, right, start=90,
+                    extent=-min(359.9, quota.remaining * 3.599),
+                    style="arc", outline=self._ring_color(quota, normal),
+                    width=stroke,
                 )
-            center = x + d / 2
-            percentage = "--" if q.remaining is None else f"{q.remaining}%"
-            self.canvas.create_text(
-                center, d / 2, text=percentage, fill=color,
-                font=("Segoe UI", -max(10, round(12 * scale)), "bold"),
-            )
-            self.canvas.create_text(
-                center, d + round(9 * scale), text=label, fill="#9384a6",
-                font=("Segoe UI", -max(9, round(10 * scale))),
-            )
+
+        arc(outer, COLOR_5H, 5, max(3, round(5 * scale)))
+        arc(inner, COLOR_WEEK, 16, max(2, round(4 * scale)))
+        five = "--" if outer.remaining is None else str(outer.remaining)
+        week = "--" if inner.remaining is None else str(inner.remaining)
+        self.canvas.create_text(
+            center, center, text=f"{five}/{week}", fill="#706083",
+            font=("Segoe UI", -max(10, round(12 * scale)), "bold"),
+        )
 
     def _tick(self) -> None:
         while True:
@@ -167,6 +173,7 @@ class RingWidget:
             except queue.Empty:
                 break
             self.refreshing = False
+            self._hide_tip()
             if status == "ok":
                 self.values = value
                 self.last_success = time.monotonic()
@@ -175,29 +182,49 @@ class RingWidget:
                 self.error = str(value)
             self._render()
 
-        if not self.demo:
+        # Do not fight user dragging. Movement tracking resumes on release.
+        if self.drag_origin is None:
             try:
                 pet = self.locator.find()
             except Exception as exc:
                 pet = None
                 self.error = f"宠物窗口定位失败：{exc}"
             if pet is None:
-                if self.root.state() != "withdrawn":
-                    self.root.withdraw()
+                self.motion.reset()
                 self.pet = None
+                if self.demo:
+                    x, y = self.preview_origin
+                    self.root.geometry(f"{self.width}x{self.height}{x + self.offset_x:+d}{y + self.offset_y:+d}")
+                    if self.root.state() == "withdrawn":
+                        self.root.deiconify()
+                else:
+                    self._hide_tip()
+                    if self.root.state() != "withdrawn":
+                        self.root.withdraw()
             else:
                 if self.pet is None or self.pet.dpi != pet.dpi:
                     self._sizes(pet.dpi)
                 self.pet = pet
+                # HWND bounds can be a large transparent host; geometry code
+                # anchors to its lower-left *region*, not its outer right edge.
                 x, y = follow_position(
                     pet.rect, self.width, self.height, pet.work_area,
                     self.offset_x, self.offset_y,
                 )
-                self.root.geometry(f"{self.width}x{self.height}{x:+d}{y:+d}")
-                if self.root.state() == "withdrawn":
-                    self.root.deiconify()
-                    self.root.wm_attributes("-topmost", True)
-        self.root.after(400, self._tick)
+                # --demo is always visible. For real usage, don't drag a
+                # trailing indicator across the desktop at a low frame rate:
+                # hide during host movement and restore after ~0.55s stable.
+                still = self.motion.should_show(pet.rect, pet.handle, time.monotonic())
+                if not self.demo and not still:
+                    self._hide_tip()
+                    if self.root.state() != "withdrawn":
+                        self.root.withdraw()
+                else:
+                    self.root.geometry(f"{self.width}x{self.height}{x:+d}{y:+d}")
+                    if self.root.state() == "withdrawn":
+                        self.root.deiconify()
+                        self.root.wm_attributes("-topmost", True)
+        self.root.after(100, self._tick)
 
     def refresh(self) -> None:
         if self.demo or self.refreshing:
@@ -223,8 +250,9 @@ class RingWidget:
         x, y, ox, oy = self.drag_origin
         self.offset_x = max(-1500, min(1500, ox + event.x_root - x))
         self.offset_y = max(-1500, min(1500, oy + event.y_root - y))
-        if self.demo:
-            self.root.geometry(f"+{max(0, 100 + self.offset_x)}+{max(0, 100 + self.offset_y)}")
+        if self.demo and self.pet is None:
+            x, y = self.preview_origin
+            self.root.geometry(f"{x + self.offset_x:+d}{y + self.offset_y:+d}")
         elif self.pet is not None:
             px, py = follow_position(
                 self.pet.rect, self.width, self.height, self.pet.work_area,
