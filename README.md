@@ -41,13 +41,52 @@ python main.py
 - **移动位置**：按住同心圆环拖动，松手保存相对宠物的偏移。
 - **查看详情**：鼠标悬停查看 5h、7d 的准确百分比、重置时间与数据新鲜度。
 - **右键菜单**：立即刷新 / 恢复默认位置 / 退出。
-- **退出**：右键 → 退出（不会关闭 Codex）。
-- **重新打开**：再次运行 `python main.py`；程序不自动注册 Windows 启动项。
+- **退出**：右键 → 退出（不会关闭 Codex；仅隐藏 Mini 只会隐藏圆环，不会结束后台观察进程）。
+- **重新打开**：再次运行 `python main.py`。用户登录自启为可选安装项，默认不自动注册。
 
 个人位置/校准文件：`%LOCALAPPDATA%\CodexPetLimitRings\settings.json`。
 可编辑的外观配置：项目根目录 `config.json`（见下）。
 
 圆环不会代替 Codex 对额度的真实判断。仅当 App Server 返回了**准确的 300 / 10080 分钟窗口**时，才分别标为 5h / 7d；缺失数据将显示 `--`。
+
+## V6：宠物生命周期联动、淡入淡出、可选登录自启
+
+新的默认行为：**只在原生 Mini 宠物的 UIA Image 元素可见时显示圆环**。宿主透明 HWND 即使继续存在，`not_found`、`pending` 或过期的 UIA 坐标都不会让圆环在旧位置冒出来。关掉 / 隐藏 Mini 后圆环淡出、完全隐藏；重新显示 Mini 后自动恢复。**圆环的 Python 监听进程仍在后台运行**，这是自动恢复所必需的。右键「退出圆环」会真正结束进程，重开需要再次启动。
+
+UI 动画采用非阻塞的渐隐渐现（默认淡入 220ms、淡出 130ms），不再每次都立即 `withdraw()`。持续移动时仍暂时隐藏，以免低频 UIA 数据导致法力环追着角色跳动。请自行在 Windows 上验收 Tk 的 `-alpha` 与透明色同时使用的表现；如果本机不兼容，可以在配置中关闭动画。
+
+```json
+{
+  "animation": {
+    "enabled": true,
+    "fadeInMs": 220,
+    "fadeOutMs": 130,
+    "frameMs": 33
+  },
+  "visibility": {
+    "requireUIA": true
+  }
+}
+```
+
+这些设置已经在 `config.example.json` 提供，复制为 `config.json` 后保存即可热加载。只有旧版 Codex 的 UIA 无法工作时才建议将 `requireUIA` 改为 `false`；这会重新允许宿主/手动估算，宠物隐藏时可能残留圆环。
+
+**让它跟随宠物自动出现，无须手工启动程序**，需要一个很小的后台观察进程。可以选择在 Windows 用户登录时启动它（不会改 Codex 安装内容、不会请求管理员权限），等宠物出现才显示：
+
+```powershell
+# 当前用户登录自启（可选，一次安装即可）
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\Autostart.ps1 -Mode Install
+
+# 检查安装状态
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\Autostart.ps1 -Mode Status
+
+# 不想开机自启时，随时卸载启动项
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\Autostart.ps1 -Mode Remove
+```
+
+登录启动的是当前 Python 环境的 `pythonw.exe main.py`，它不产生控制台窗口；即使 Codex 没启动，观察进程仍会静默等待（没有 Mini HWND 时不启动 UIA 子进程）。不会自动修改或关闭 Codex。只注销 / 重启 Windows 才会重新执行开机启动项；在本次登录会话内测试，仍可先 `python main.py`。
+
+若要**后台进程也在宠物关闭时完全退出**，则必须再设一个独立守护进程来检测下一次 Mini 出现。当前采用单常驻观察进程，避免为一个小圆环再增加两层进程管理。
 
 ## V5：原生 UI Automation 精确跟随（实验）
 
@@ -202,5 +241,5 @@ Codex 桌面安装 / 更新、宠物窗口属性变化可能影响探测，请�
 ## 已知限制
 
 - 只能在 Windows 桌面运行；没有原生宠物时默认隐藏（`--demo` 除外）。
-- GitHub CI 校验 Python 编译、额度解析、主题配置、手动校准和移动检测；**真实 Windows 桌面位置、DPI、拖动及动画显隐仍需要 ANMI-SERVER 实机验收**。
+- GitHub CI 校验 Python 编译、额度解析、主题配置、渐变过渡、手动校准和移动检测；**真实 Windows 桌面位置、DPI、拖动及动画显隐仍需要 ANMI-SERVER 实机验收**。
 - Codex 或 Windows 以后修改窗口类型、UI 状态字段时，可能需要调整识别条件。**真实桌面跟随仍待你的主副屏实测**；若无法找到有效宿主窗口，程序宁可隐藏并让 `--diagnose` 报告原因，不假装已经跟随。
