@@ -210,9 +210,11 @@ class RingWidget:
                 outer["diameter"], inner["diameter"], inner["stroke"],
                 glass, scale,
             )
+            shadow_x, shadow_y = plan.shadow_offset
             for radius, color in zip(plan.shadow_radii, plan.shadow_colors):
                 self.canvas.create_oval(
-                    cx - radius, cy - radius, cx + radius, cy + radius,
+                    cx + shadow_x - radius, cy + shadow_y - radius,
+                    cx + shadow_x + radius, cy + shadow_y + radius,
                     outline=color, width=max(1, round(scale)),
                 )
             r = plan.disc_radius
