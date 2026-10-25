@@ -1,0 +1,43 @@
+{
+  "rings": {
+    "outer": {
+      "diameter": 78,
+      "stroke": 6,
+      "color": "#aa8bda"
+    },
+    "inner": {
+      "diameter": 54,
+      "stroke": 5,
+      "color": "#80b8e1"
+    },
+    "trackColor": "#d8d2e4",
+    "warningColor": "#e6b15f",
+    "criticalColor": "#ec797d",
+    "unknownColor": "#97949f",
+    "warningBelow": 20,
+    "criticalBelow": 10
+  },
+  "background": {
+    "enabled": false,
+    "color": "#f5f0fc",
+    "borderColor": "#d0c2e4",
+    "borderWidth": 0,
+    "padding": 8
+  },
+  "text": {
+    "fontFamily": "Segoe UI",
+    "fontSize": 12,
+    "bold": true,
+    "color": "#706083",
+    "separator": "/",
+    "showPercentSign": false
+  },
+  "position": {
+    "side": "left",
+    "gap": 10,
+    "verticalRatio": 0.12,
+    "offsetX": 0,
+    "offsetY": 0,
+    "settleMs": 600
+  }
+}
