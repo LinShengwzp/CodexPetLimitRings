@@ -63,7 +63,7 @@ def cli() -> int:
         # The UIA reader is an asynchronous PowerShell child. Wait briefly for
         # a real frame rather than reporting its approximate fallback before
         # the watcher has even initialized. Normally < 2 seconds.
-        if pet is not None and not details.get("uia_image_available"):
+        if details.get("uia_status") in ("pending", "unavailable", "stale"):
             import time
             deadline = time.monotonic() + 3.5
             while time.monotonic() < deadline:
