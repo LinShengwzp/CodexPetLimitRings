@@ -96,22 +96,18 @@ def follow_position(
     pet: Rect, width: int, height: int, work: Rect,
     offset_x: int = 0, offset_y: int = 0,
 ) -> tuple[int, int]:
-    """Place a compact badge beside the pet, not over her face.
+    """Place a compact ring to the left of the visible mascot rectangle.
 
-    Prefer the right side; flip to the left if the right side is offscreen.
-    Offsets are persisted as screen-pixel adjustments relative to the pet.
+    Flip to the right near a monitor's left edge; clamp to its work area.
+    Saved offsets are relative to the sprite, not the transparent host.
     """
-    margin = 8
-    if pet.width >= 540 or pet.height >= 700:
-        # Codex sometimes hosts the tiny avatar inside a large transparent
-        # window (e.g. 888x1080). Its right edge is not the character.
-        base_x = pet.left + min(220, max(50, round(pet.width * 0.24)))
-        base_y = pet.bottom - height - 155
-    else:
-        right_x = pet.right + margin
-        left_x = pet.left - width - margin
-        base_x = right_x if right_x + width <= work.right else left_x
-        base_y = pet.top + max(0, (pet.height - height) // 2)
+    # Here pet is the *mascot sprite* rectangle, not a full-screen host.
+    # The compact badge prefers the left of the sprite, falling back right.
+    margin = 10
+    left_x = pet.left - width - margin
+    right_x = pet.right + margin
+    base_x = left_x if left_x >= work.left else right_x
+    base_y = pet.top + max(0, round(pet.height * 0.12))
     max_x = max(work.left, work.right - width)
     max_y = max(work.top, work.bottom - height)
     x = max(work.left, min(max_x, base_x + offset_x))
