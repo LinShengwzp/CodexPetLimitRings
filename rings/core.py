@@ -102,15 +102,60 @@ def follow_position(
     Offsets are persisted as screen-pixel adjustments relative to the pet.
     """
     margin = 8
-    right_x = pet.right + margin
-    left_x = pet.left - width - margin
-    base_x = right_x if right_x + width <= work.right else left_x
-    base_y = pet.top + max(0, (pet.height - height) // 2)
+    if pet.width >= 540 or pet.height >= 700:
+        # Codex sometimes hosts the tiny avatar inside a large transparent
+        # window (e.g. 888x1080). Its right edge is not the character.
+        base_x = pet.left + min(220, max(50, round(pet.width * 0.24)))
+        base_y = pet.bottom - height - 155
+    else:
+        right_x = pet.right + margin
+        left_x = pet.left - width - margin
+        base_x = right_x if right_x + width <= work.right else left_x
+        base_y = pet.top + max(0, (pet.height - height) // 2)
     max_x = max(work.left, work.right - width)
     max_y = max(work.top, work.bottom - height)
     x = max(work.left, min(max_x, base_x + offset_x))
     y = max(work.top, min(max_y, base_y + offset_y))
     return x, y
+
+
+
+class PetMotionTracker:
+    """Hide the overlay while the native pet host window moves.
+
+    CSS/sprite motion inside a stationary transparent HWND cannot be sensed
+    using Win32 rectangles alone.
+    """
+
+    def __init__(self, settle_seconds: float = 0.55, tolerance_px: int = 1):
+        self.settle_seconds = settle_seconds
+        self.tolerance_px = tolerance_px
+        self.last_rect: Rect | None = None
+        self.last_handle: int | None = None
+        self.changed_at: float | None = None
+
+    def reset(self) -> None:
+        self.last_rect = None
+        self.last_handle = None
+        self.changed_at = None
+
+    def should_show(self, rect: Rect, handle: int, now: float) -> bool:
+        previous = self.last_rect
+        changed = (
+            previous is None or self.last_handle != handle
+            or max(
+                abs(a - b) for a, b in zip(
+                    (rect.left, rect.top, rect.right, rect.bottom),
+                    (previous.left, previous.top, previous.right, previous.bottom),
+                )
+            ) > self.tolerance_px
+        )
+        if changed:
+            self.last_rect = rect
+            self.last_handle = handle
+            self.changed_at = now
+            return False
+        return self.changed_at is not None and now - self.changed_at >= self.settle_seconds
 
 
 def explain(quotas: Quotas) -> dict:
