@@ -34,7 +34,7 @@ def load_offsets() -> tuple[int, int]:
         # Old V1 offsets used the huge HWND's right edge as their base.
         # Reusing them with V2's lower-left anchor sends the rings offscreen.
         # Preserve the original JSON on disk until the user repositions.
-        if data.get("layoutVersion") != 2:
+        if data.get("layoutVersion") != 3:
             return 0, 0
         return (
             max(-1500, min(1500, int(data.get("offsetX", 0)))),
@@ -48,7 +48,7 @@ def save_offsets(x: int, y: int) -> None:
     file = config_file()
     file.parent.mkdir(parents=True, exist_ok=True)
     temp = file.with_name(file.name + ".tmp")
-    temp.write_text(json.dumps({"layoutVersion": 2, "offsetX": x, "offsetY": y}, ensure_ascii=False, indent=2), encoding="utf-8")
+    temp.write_text(json.dumps({"layoutVersion": 3, "offsetX": x, "offsetY": y}, ensure_ascii=False, indent=2), encoding="utf-8")
     temp.replace(file)
 
 
@@ -74,6 +74,8 @@ class RingWidget:
         self.locator = PetLocator()
         self.pet = None
         self.motion = PetMotionTracker(settle_seconds=0.55)
+        self.dragging_pet = False
+        self.pet_drag_settle_until = 0.0
         self.preview_origin = (
             self.root.winfo_pointerx() + 22,
             self.root.winfo_pointery() + 22,
@@ -196,6 +198,7 @@ class RingWidget:
                 self.error = f"宠物窗口定位失败：{exc}"
             if pet is None:
                 self.motion.reset()
+                self.dragging_pet = False
                 self.pet = None
                 if self.demo:
                     x, y = self.preview_origin
@@ -210,8 +213,8 @@ class RingWidget:
                 if self.pet is None or self.pet.dpi != pet.dpi:
                     self._sizes(pet.dpi)
                 self.pet = pet
-                # HWND bounds can be a large transparent host; geometry code
-                # anchors to its lower-left *region*, not its outer right edge.
+                # pet.rect is now the actual mascot position from Codex's
+                # persisted UI state, verified against its visible native host.
                 x, y = follow_position(
                     pet.rect, self.width, self.height, pet.work_area,
                     self.offset_x, self.offset_y,
@@ -219,8 +222,25 @@ class RingWidget:
                 # --demo is always visible. For real usage, don't drag a
                 # trailing indicator across the desktop at a low frame rate:
                 # hide during host movement and restore after ~0.55s stable.
-                still = self.motion.should_show(pet.rect, pet.handle, time.monotonic())
-                if not self.demo and not still:
+                now = time.monotonic()
+                still = self.motion.should_show(pet.rect, pet.handle, now)
+                # A native host can remain stationary while its dragon sprite
+                # moves inside it. Suppress HUD as soon as the user starts
+                # dragging on/near the visible mascot, even before Codex saves
+                # the new sprite placement.
+                left_down = self._left_mouse_down()
+                mouse_x, mouse_y = self.root.winfo_pointerxy()
+                near_pet = (
+                    pet.rect.left - 45 <= mouse_x <= pet.rect.right + 45
+                    and pet.rect.top - 45 <= mouse_y <= pet.rect.bottom + 45
+                )
+                if left_down and (near_pet or self.dragging_pet):
+                    self.dragging_pet = True
+                elif not left_down and self.dragging_pet:
+                    self.dragging_pet = False
+                    self.pet_drag_settle_until = now + 0.6
+                moving = self.dragging_pet or now < self.pet_drag_settle_until
+                if not self.demo and (not still or moving):
                     self._hide_tip()
                     if self.root.state() != "withdrawn":
                         self.root.withdraw()
@@ -230,6 +250,16 @@ class RingWidget:
                         self.root.deiconify()
                         self.root.wm_attributes("-topmost", True)
         self.root.after(100, self._tick)
+
+    @staticmethod
+    def _left_mouse_down() -> bool:
+        if os.name != "nt":
+            return False
+        import ctypes
+        try:
+            return bool(ctypes.windll.user32.GetAsyncKeyState(0x01) & 0x8000)
+        except (AttributeError, OSError):
+            return False
 
     def refresh(self) -> None:
         if self.demo or self.refreshing:
