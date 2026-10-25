@@ -84,7 +84,8 @@ class RingWidget:
         self.events: queue.Queue = queue.Queue()
         self.refreshing = False
         self.drag_origin = None
-        self.pet_drag: tuple[int, int, str] | None = None
+        # Mouse x/y, monitor key, host.right/bottom at previous drag sample.
+        self.pet_drag: tuple[int, int, str, int, int] | None = None
         self.pet_drag_settle_until = 0.0
         self.tooltip: tk.Toplevel | None = None
         self.calibration_pending = False
@@ -285,15 +286,22 @@ class RingWidget:
                 write_settings({"calibrations": self.calibrations})
             return now < self.pet_drag_settle_until
 
+        host = pet.host_rect
         if self.pet_drag is None:
             rect = pet.rect
             if rect.left - 22 <= mx <= rect.right + 22 and rect.top - 22 <= my <= rect.bottom + 22:
-                self.pet_drag = (mx, my, key)
+                self.pet_drag = (mx, my, key, host.right, host.bottom)
         else:
-            x, y, dragging_key = self.pet_drag
-            if dragging_key == key and (mx != x or my != y):
-                self.calibrations[key] = move_anchor(anchor, mx - x, my - y)
-                self.pet_drag = (mx, my, key)
+            x, y, dragging_key, previous_right, previous_bottom = self.pet_drag
+            if dragging_key == key:
+                cursor_dx, cursor_dy = mx - x, my - y
+                host_dx, host_dy = host.right - previous_right, host.bottom - previous_bottom
+                if cursor_dx or cursor_dy or host_dx or host_dy:
+                    self.calibrations[key] = move_anchor(
+                        anchor, cursor_dx, cursor_dy,
+                        host_dx=host_dx, host_dy=host_dy,
+                    )
+                    self.pet_drag = (mx, my, key, host.right, host.bottom)
         return self.pet_drag is not None
 
     def _tick(self) -> None:
