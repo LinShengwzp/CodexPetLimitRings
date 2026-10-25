@@ -7,7 +7,7 @@
 - 使用 Codex **App Server** 的只读 `account/rateLimits/read`，**不读取 `auth.json` 或复制令牌**。
 - 默认每 60 秒刷新；右键查看重置时间、立即刷新、重置位置、退出。
 - 适配 Windows 10/11 的透明窗口、多显示器和 DPI。
-- **外观配置完全外置**：两个圆环的直径、粗细、颜色、底色、背景、字体和跟随位置；修改 `config.json` 后约 1 秒自动重新加载。
+- **外观配置完全外置**：两个圆环的直径、粗细、颜色、假毛玻璃、阴影、背景、字体和跟随位置；修改 `config.json` 后约 1 秒自动重新加载。
 - 没拿到数据时显示 `--`，而不是编造 0% 或 100%。
 
 > 当前仍是轻量实验版。目标是一个安静的小装饰，**不会额外显示第二只宠物**。这是独立非官方项目。
@@ -48,6 +48,41 @@ python main.py
 可编辑的外观配置：项目根目录 `config.json`（见下）。
 
 圆环不会代替 Codex 对额度的真实判断。仅当 App Server 返回了**准确的 300 / 10080 分钟窗口**时，才分别标为 5h / 7d；缺失数据将显示 `--`。
+
+## V7：轻量假毛玻璃底盘（默认开启）
+
+双环现在默认多了一层**半透明淡紫白圆底、柔和紫灰高斯式阴影、细白边和顶部高光**，不是桌面截屏，也不使用 Windows DWM / Acrylic 真模糊。使用 Python 标准库绘制带透明通道的 PNG，由 Tk 8.6 加载；**不需要 Pillow、截图权限或额外安装依赖**。静态背景只在配色、窗口 DPI、尺寸变化时重新渲染，不随 UIA 的坐标更新重复计算。
+
+如果已经有个人 `config.json`，只需增加下面的 `glass` 节；省略时程序也会采用以下默认玻璃效果：
+
+```json
+{
+  "glass": {
+    "enabled": true,
+    "fillColor": "#f7f2ff",
+    "fillOpacity": 56,
+    "shadowColor": "#2d244d",
+    "shadowOpacity": 24,
+    "shadowBlur": 8,
+    "shadowSpread": 1,
+    "shadowOffsetX": 1,
+    "shadowOffsetY": 3,
+    "rimColor": "#ffffff",
+    "rimOpacity": 74,
+    "highlightColor": "#ffffff",
+    "highlightOpacity": 35,
+    "outerMargin": 2
+  }
+}
+```
+
+- `fillOpacity`、`shadowOpacity`、`rimOpacity`、`highlightOpacity` 均为 **0–100 的不透明度百分比**，不接受浮点小数作为 0–1 比例。
+- `shadowBlur` 调整柔化范围，`shadowSpread` 控制阴影外扩，`shadowOffsetX/Y` 调整阴影方向，像素数会随 DPI 放大。
+- `outerMargin` 控制玻璃底盘比外圈进度环略大多少。
+- 保存配置后约一秒自动生效。如想回到原先完全透明的双环，将 `glass.enabled` 改为 `false`。
+- 原有 `background` 仍可用于旧版不透明纯色背景。**玻璃打开时优先显示玻璃，避免两个底盘叠加。**
+
+**兼容性说明**：Windows Tk 8.6 的半透明 PNG 与窗口透明色 `-transparentcolor` 的实际混合方式因运行库有所不同，尤其是渐变边缘或圆底可能出现颜色伪影。若实测遇到黑边或异常不透明，请反馈运行时截图，先把 `glass.enabled=false` 即可回退；不影响额度读取和 UIA 跟随。当前 CI 仅校验 RGBA / PNG 生成和代码，不等于已经验收真实 Windows 的视觉合成效果。
 
 ## V6：宠物生命周期联动、淡入淡出、可选登录自启
 
@@ -140,14 +175,17 @@ notepad .\config.json
 | `rings.inner.diameter / stroke / color` | 每周内环的直径、线宽和颜色 |
 | `rings.trackColor` | 未使用进度部分的底色 |
 | `rings.warningColor / criticalColor / unknownColor` | 低额度 / 极低额度 / 数据未知时使用的颜色 |
-| `background.enabled` | 是否绘制圆形背景，默认为 `false`（透明） |
-| `background.color / borderColor / borderWidth / padding` | 背景颜色、描边和留白 |
+| `background.enabled` | 是否绘制传统纯色圆形背景；开启玻璃时不使用 |
+| `background.color / borderColor / borderWidth / padding` | 传统背景颜色、描边和留白 |
+| `glass.enabled / fillColor / fillOpacity` | 假毛玻璃开关、底盘色和透明度 |
+| `glass.shadowColor / shadowOpacity / shadowBlur` | 阴影颜色、透明度和柔和程度 |
+| `glass.rimColor / rimOpacity / highlightOpacity` | 高光描边与顶部轻光 |
 | `text.fontFamily / fontSize / bold / color` | 中心数字字体、大小、粗细和颜色 |
 | `text.separator / showPercentSign` | `41/91` 分隔符和百分号显示 |
 | `position.side / gap / verticalRatio` | 优先贴角色左侧或右侧、距离和纵向对齐位置 |
 | `position.offsetX / offsetY / settleMs` | 额外偏移和移动后恢复显示的等待时间 |
 
-注意：Tkinter 的普通画布背景只支持**全透明**或**不透明实色**，本版不支持单独设置背景半透明度。颜色请输入 `#RRGGBB`。非常极端的环大小会被配置校验限制为合理范围。
+注意：传统 Tkinter Canvas 纯色背景仍然只支持全透明或不透明实色；新增的假毛玻璃通过 RGBA PNG 提供局部半透明视觉效果，但并不会真的模糊桌面壁纸。颜色请输入 `#RRGGBB`。非常极端的环大小会被配置校验限制为合理范围。
 
 `--probe` 现在还会报告 `codex_state_file`（仅文件位置、是否存在和与宠物有关的字段名），不会打印 Codex 凭据。如果返回 `manual_calibration_active=true`，表示已采用人工校准的角色坐标。
 
@@ -228,6 +266,7 @@ Codex 桌面安装 / 更新、宠物窗口属性变化可能影响探测，请�
 - `scripts/PetUiaWatcher.ps1`：后台 UIA 元素查询，只输出人物的矩形坐标。
 - `rings/state.py`：只读解析 Codex 原生 Mini 的 UI 坐标和 mascot 信息。
 - `rings/ui.py`：Tkinter 双圆环透明浮层、拖动、刷新、提示和校准。
+- `rings/glass.py`：用标准库离线生成带软阴影的透明 RGBA 毛玻璃纹理。
 - `rings/config.py`：外观配置验证与自动重新加载。
 - `rings/calibration.py`：每屏手动校准与本地位置保存。
 - `main.py`：启动、预览、诊断入口。
