@@ -423,7 +423,7 @@ class RingWidget:
             self._ring_target = (px, py)
             self.root.geometry(f"{self.width}x{self.height}{px:+d}{py:+d}")
         self._trace_reason = "ring_drag"
-        self._trace_position("ring_drag", force=True)
+        self._trace_position("ring_drag")
 
     def _end_drag(self, _event) -> None:
         if self.drag_origin is not None:
