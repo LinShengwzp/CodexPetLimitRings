@@ -27,6 +27,14 @@ def cli() -> int:
     parser.add_argument("--once", action="store_true", help="print subscription quota JSON and exit")
     parser.add_argument("--probe", action="store_true", help="inspect live mascot position and native host window")
     parser.add_argument("--diagnose", action="store_true", help="show sanitized Codex window candidates and saved pet geometry")
+    parser.add_argument(
+        "--trace-positions", action="store_true",
+        help="print live pet/host/ring/cursor coordinates and save rotating JSONL logs",
+    )
+    parser.add_argument(
+        "--trace-interval", type=float, default=0.5, metavar="SECONDS",
+        help="sampling interval for --trace-positions, default 0.5s (min 0.2s)",
+    )
     options = parser.parse_args()
 
     if os.name != "nt" and not options.once:
@@ -92,8 +100,18 @@ def cli() -> int:
             print("额度圆环已经运行，不重复启动。")
             return 0
     try:
+        tracer = None
+        if options.trace_positions:
+            from rings.position_trace import make_position_tracer
+            tracer = make_position_tracer(interval=max(0.2, min(10.0, options.trace_interval)))
+            print("位置日志已开启。每条 JSONL 同时包含窗口、角色、法力环和鼠标坐标。", flush=True)
+            print(f"日志保存到：{tracer.file_path}", flush=True)
+            tracer.emit("start", {
+                "mode": "demo" if options.demo else "live",
+                "sample_interval_seconds": tracer.interval,
+            }, force=True)
         from rings.ui import RingWidget
-        RingWidget(demo=options.demo).run()
+        RingWidget(demo=options.demo, position_tracer=tracer).run()
         return 0
     finally:
         if mutex:
