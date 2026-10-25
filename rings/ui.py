@@ -224,12 +224,11 @@ class RingWidget:
                 width=max(1, round(scale)),
             )
             if plan.highlight_opacity:
-                highlight_color = plan.disc_rim
                 self.canvas.create_arc(
                     cx - r + scale, cy - r + scale,
                     cx + r - scale, cy + r - scale,
                     start=35, extent=108, style="arc",
-                    outline=highlight_color, width=max(1, round(scale)),
+                    outline=plan.highlight, width=max(1, round(scale)),
                 )
         elif bg["enabled"]:
             margin = max(1, round(bg["borderWidth"] * scale / 2 + 1))
