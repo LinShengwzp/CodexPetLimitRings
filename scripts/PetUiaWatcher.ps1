@@ -108,5 +108,8 @@ while ($true) {
         [Console]::Out.WriteLine('{"status":"unavailable"}')
     }
     [Console]::Out.Flush()
-    Start-Sleep -Milliseconds $IntervalMs
+    # Avoid traversing Chromium's UIA tree at 3Hz while Mini is hidden.
+    # A newly opened pet then reappears within about a second.
+    $delay = if ($null -eq $result) { [Math]::Max($IntervalMs, 850) } else { $IntervalMs }
+    Start-Sleep -Milliseconds $delay
 }
