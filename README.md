@@ -49,6 +49,28 @@ python main.py
 
 圆环不会代替 Codex 对额度的真实判断。仅当 App Server 返回了**准确的 300 / 10080 分钟窗口**时，才分别标为 5h / 7d；缺失数据将显示 `--`。
 
+## V5：原生 UI Automation 精确跟随（实验）
+
+这版优先使用 **Windows UI Automation（UIA）**，从 Codex 原生 Mini 窗口的元素树直接读取宠物的 `ControlType.Image` 边界。来自真实机器的两条记录：
+
+- 主屏：`[1594,429,1818,672]`（224×243 px）
+- 副屏：`[3617,286,3841,529]`（224×243 px）
+
+这些是人物 **UI 交互区域** 的坐标，不是 PNG 透明像素轮廓。外层透明宿主可以占满整个屏幕高度；现在不会把该宿主的 top/bottom 误认成人物边界。
+
+- 开启宠物后直接 `python main.py --probe`，等待片刻查看 `position_source`。
+- 理想结果是 `"position_source": "uia-image"`，同时 `precise_mascot_geometry: true`。
+- 正常运行 `python main.py` 会启动一个隐藏的、只读 PowerShell UIA 子进程；约每 300ms 更新一次宠物坐标。图形界面不会等待 UIA 查询结果。
+- 若一开始仍为 `approximate-host-corner`，把鼠标移到小龙娘身上再等一会儿。Chromium 有时需要鼠标 UIA 命中来激活无障碍元素。
+- 自动搜索失败时，会退回 Codex UI 状态、旧手动校准或估算定位，不会更改系统设置或 Codex 文件。右键的**手动校准**仍可使用。
+- 若要单独验证底层 UIA 子进程，可在 `--probe` 输出中取得 `hwnd`，运行：
+  ```powershell
+  powershell.exe -NoProfile -Sta -File .\scripts\PetUiaWatcher.ps1 -HostHwnd 134082
+  ```
+  这里的 `134082` 是示例，换成当次真实的 HWND。正常时每隔约 0.3 秒打印 `{"status":"ok","left":...}`，未找到时打印 `not_found`；Ctrl+C 退出。**不必把输出留在后台无人看管。**
+
+特别注意：**代码语法和几何单元测试不等于 UIA 实机验收**。每台 Codex Desktop 的 Chromium 无障碍树可能不同。如果 `--probe` 没有显示 `uia-image`，先反馈该结果与子进程状态，再决定下一步调整。
+
 ## V4：校准真实角色位置与自定义外观
 
 **为什么要校准？** 在某些 Codex Desktop 版本中，`--probe` 返回的只是覆盖整个屏幕高度的透明宿主窗口，且 `saved_codex_state.state_open_with_bounds=false`。此时操作系统无法告诉我们小龙娘在宿主的上半部分还是下半部分，程序应显示 `approximate-host-corner`，**绝不将估算冒充精确位置**。
@@ -162,7 +184,9 @@ Codex 桌面安装 / 更新、宠物窗口属性变化可能影响探测，请�
 
 - `rings/core.py`：限额解析、五小时和每周窗口校验、浮层位置计算。
 - `rings/bridge.py`：Codex App Server 只读连接与超时处理。
-- `rings/pet.py`：Windows 原生窗口验证、角色坐标选择、多显示器工作区。
+- `rings/pet.py`：Windows 原生窗口验证、UIA/状态/校准定位选择、多显示器工作区。
+- `rings/uia.py`：非阻塞 PowerShell 子进程桥接与过期值处理。
+- `scripts/PetUiaWatcher.ps1`：后台 UIA 元素查询，只输出人物的矩形坐标。
 - `rings/state.py`：只读解析 Codex 原生 Mini 的 UI 坐标和 mascot 信息。
 - `rings/ui.py`：Tkinter 双圆环透明浮层、拖动、刷新、提示和校准。
 - `rings/config.py`：外观配置验证与自动重新加载。
