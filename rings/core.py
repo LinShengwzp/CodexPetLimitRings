@@ -95,6 +95,7 @@ def parse_quotas(response: Any) -> Quotas:
 def follow_position(
     pet: Rect, width: int, height: int, work: Rect,
     offset_x: int = 0, offset_y: int = 0,
+    *, side: str = "left", gap: int = 10, vertical_ratio: float = 0.12,
 ) -> tuple[int, int]:
     """Place a compact ring to the left of the visible mascot rectangle.
 
@@ -103,11 +104,16 @@ def follow_position(
     """
     # Here pet is the *mascot sprite* rectangle, not a full-screen host.
     # The compact badge prefers the left of the sprite, falling back right.
-    margin = 10
+    margin = max(0, min(100, gap))
     left_x = pet.left - width - margin
     right_x = pet.right + margin
-    base_x = left_x if left_x >= work.left else right_x
-    base_y = pet.top + max(0, round(pet.height * 0.12))
+    prefer_right = side == "right"
+    preferred = right_x if prefer_right else left_x
+    alternative = left_x if prefer_right else right_x
+    def fits(x: int) -> bool:
+        return work.left <= x and x + width <= work.right
+    base_x = preferred if fits(preferred) or not fits(alternative) else alternative
+    base_y = pet.top + round(pet.height * max(0.0, min(1.0, vertical_ratio)))
     max_x = max(work.left, work.right - width)
     max_y = max(work.top, work.bottom - height)
     x = max(work.left, min(max_x, base_x + offset_x))
