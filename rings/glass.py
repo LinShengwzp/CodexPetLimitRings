@@ -32,6 +32,7 @@ class GlassPlan:
     disc_rim: str
     highlight: str
     highlight_opacity: int
+    shadow_offset: tuple[float, float]
 
 
 def plan_glass(
@@ -53,9 +54,13 @@ def plan_glass(
     shadow = config["shadowColor"]
     # Width less than 9 physical pixels outside the progress ring. The last
     # contour is extremely faint; no broad dark/matte annulus is drawn.
-    radii = (outer_radius + 5.5 * scale,
-             outer_radius + 3.5 * scale,
-             outer_radius + 1.5 * scale)
+    # Map the old "blur" knobs to at most a handful of light contours.
+    # Never create another broad dark opaque disk.
+    blur = max(1.5, min(6.5, config["shadowBlur"] * 0.65)) * scale
+    spread = min(2.0, config["shadowSpread"] * 0.5) * scale
+    radii = (outer_radius + 1.5 * scale + spread + blur,
+             outer_radius + 1.5 * scale + spread + blur * 0.55,
+             outer_radius + 1.5 * scale + spread)
     colors = tuple(
         blend_hex(shadow, fill, glow * weight)
         for weight in (0.18, 0.32, 0.48)
@@ -78,4 +83,8 @@ def plan_glass(
         disc_rim=disc_rim,
         highlight=config["highlightColor"],
         highlight_opacity=config["highlightOpacity"],
+        shadow_offset=(
+            max(-2.0, min(2.0, config["shadowOffsetX"])) * scale,
+            max(-2.0, min(2.0, config["shadowOffsetY"])) * scale,
+        ),
     )
