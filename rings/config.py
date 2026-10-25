@@ -152,10 +152,12 @@ class ConfigWatcher:
     def refresh(self) -> bool:
         file = self.path or (USER_CONFIG if USER_CONFIG.exists() else SAMPLE_CONFIG)
         try:
-            st = file.stat()
-            signature = (str(file), st.st_mtime_ns, st.st_size)
+            # File timestamps can have coarse resolution (Windows/network disks).
+            # Two rapid edits may keep the same mtime and even file size.
+            raw = file.read_bytes()
+            signature = (str(file), raw[:131072])
         except OSError:
-            signature = (str(file), None, None)
+            signature = (str(file), None)
         if self._signature == signature:
             return False
         self._signature = signature
