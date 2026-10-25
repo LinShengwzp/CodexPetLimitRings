@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import ctypes
 import os
+import time
 from ctypes import wintypes
 from dataclasses import dataclass
 
@@ -111,6 +112,8 @@ class PetLocator:
         self.user32 = ctypes.windll.user32
         self.kernel32 = ctypes.windll.kernel32
         self.dwm = ctypes.windll.dwmapi
+        self._last_lookup_at = 0.0
+        self._last_pet: Pet | None = None
         self.proc_type = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
 
         def sig(func, argtypes, restype):
@@ -225,7 +228,15 @@ class PetLocator:
         return pet, diagnostics
 
     def find(self) -> Pet | None:
+        # Parsing a potentially large global-state JSON and enumerating all
+        # Chromium windows every 100ms can make Tk render sluggish. Scan at
+        # roughly 4Hz; drag suppression still runs at the UI tick rate.
+        now = time.monotonic()
+        if now - self._last_lookup_at < 0.25:
+            return self._last_pet
         pet, _ = self.inspect()
+        self._last_pet = pet
+        self._last_lookup_at = now
         return pet
 
 
