@@ -23,7 +23,7 @@ def enable_dpi_awareness() -> None:
 
 def cli() -> int:
     parser = argparse.ArgumentParser(description="Attach two quota rings to Codex's native Mini/Pet.")
-    parser.add_argument("--demo", action="store_true", help="preview 53% / 93% without Codex")
+    parser.add_argument("--demo", action="store_true", help="preview 41/91 rings beside the pet or pointer without querying Codex")
     parser.add_argument("--once", action="store_true", help="print subscription quota JSON and exit")
     parser.add_argument("--probe", action="store_true", help="inspect the native Codex Pet window")
     options = parser.parse_args()
