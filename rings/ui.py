@@ -20,6 +20,7 @@ from .calibration import (
 from .config import ConfigWatcher
 from .core import PetMotionTracker, Quota, Quotas, Rect, follow_position
 from .pet import Pet, PetLocator
+from .transition import OpacityTransition
 
 
 COLOR_KEY = "#010203"
@@ -39,6 +40,13 @@ class RingWidget:
         self.root.configure(bg=COLOR_KEY)
         self.root.wm_attributes("-transparentcolor", COLOR_KEY)
         self.root.wm_attributes("-topmost", True)
+        self.fade = OpacityTransition()
+        self._opacity_supported = True
+        try:
+            self.root.wm_attributes("-alpha", 0.0)
+        except tk.TclError:
+            self._opacity_supported = False
+        self._geometry_cache: str | None = None
         try:
             self.root.wm_attributes("-toolwindow", True)
         except tk.TclError:
@@ -60,6 +68,7 @@ class RingWidget:
             self.calibrations = {}
 
         self.locator = PetLocator()
+        self.locator.require_uia = self.config["visibility"]["requireUIA"]
         self.pet: Pet | None = None
         self.motion = PetMotionTracker(
             settle_seconds=self.config["position"]["settleMs"] / 1000.0,
@@ -103,11 +112,56 @@ class RingWidget:
 
         if demo:
             x, y = self.preview_origin
-            self.root.geometry(f"{self.width}x{self.height}{x:+d}{y:+d}")
-            self.root.deiconify()
+            self._set_ring_visibility(True, time.monotonic(), x, y)
         else:
             self.refresh()
-        self.root.after(100, self._tick)
+        self.root.after(33, self._tick)
+
+    def _geometry_at(self, x: int, y: int) -> None:
+        geometry = f"{self.width}x{self.height}{x:+d}{y:+d}"
+        if geometry != self._geometry_cache:
+            self.root.geometry(geometry)
+            self._geometry_cache = geometry
+
+    def _set_ring_visibility(
+        self, visible: bool, now: float,
+        x: int | None = None, y: int | None = None,
+    ) -> None:
+        """Smooth show/hide without restarting native pet tracking.
+
+        Withdraw only once fully transparent, and position before showing.
+        Keeping the Tk instance alive enables immediate reappearance when the
+        user toggles Mini in Codex.
+        """
+        if x is not None and y is not None and visible:
+            self._geometry_at(x, y)
+
+        config = self.config["animation"]
+        fade_in = config["fadeInMs"] / 1000.0 if config["enabled"] else 0.0
+        fade_out = config["fadeOutMs"] / 1000.0 if config["enabled"] else 0.0
+        if not self._opacity_supported:
+            fade_in = fade_out = 0.0
+        self.fade.request(visible, now, fade_in=fade_in, fade_out=fade_out)
+        alpha = self.fade.advance(now)
+        if visible and self.root.state() == "withdrawn":
+            # alpha=0 before first mapping prevents a one-frame bright flash.
+            if self._opacity_supported:
+                try:
+                    self.root.wm_attributes("-alpha", alpha)
+                except tk.TclError:
+                    self._opacity_supported = False
+            self.root.deiconify()
+            self.root.wm_attributes("-topmost", True)
+        if not visible and alpha <= 0.001:
+            if self.root.state() != "withdrawn":
+                self._hide_tip()
+                self.root.withdraw()
+            return
+        if self._opacity_supported and self.root.state() != "withdrawn":
+            try:
+                self.root.wm_attributes("-alpha", round(alpha, 3))
+            except tk.TclError:
+                self._opacity_supported = False
 
     def _set_dimensions(self) -> None:
         style = self.config
@@ -311,6 +365,8 @@ class RingWidget:
             if self.config_watcher.refresh():
                 self.config = self.config_watcher.value
                 self.motion.settle_seconds = self.config["position"]["settleMs"] / 1000.0
+                self.locator.require_uia = self.config["visibility"]["requireUIA"]
+                self._geometry_cache = None
                 self._set_dimensions()
                 self._render()
 
@@ -344,12 +400,9 @@ class RingWidget:
                 self.pet_drag = None
                 if self.demo:
                     x, y = self.preview_origin
-                    self.root.geometry(f"{self.width}x{self.height}{x + self.offset_x:+d}{y + self.offset_y:+d}")
-                    if self.root.state() == "withdrawn":
-                        self.root.deiconify()
-                elif self.root.state() != "withdrawn":
-                    self._hide_tip()
-                    self.root.withdraw()
+                    self._set_ring_visibility(True, now, x + self.offset_x, y + self.offset_y)
+                else:
+                    self._set_ring_visibility(False, now)
             else:
                 if self.pet is None or self.pet.dpi != raw_pet.dpi:
                     self.dpi = raw_pet.dpi
@@ -380,19 +433,17 @@ class RingWidget:
                     "host_or_mascot_settling" if not settled else
                     "visible"
                 )
-                if not self.demo and (not settled or moving):
-                    if self.root.state() != "withdrawn":
-                        self._hide_tip()
-                        self.root.withdraw()
-                else:
-                    self.root.geometry(f"{self.width}x{self.height}{x:+d}{y:+d}")
-                    if self.root.state() == "withdrawn":
-                        self.root.deiconify()
-                        self.root.wm_attributes("-topmost", True)
+                should_show = self.demo or (settled and not moving)
+                self._set_ring_visibility(should_show, now, x, y)
+                if not should_show:
+                    self._hide_tip()
         if self.drag_origin is not None:
             self._trace_reason = "ring_drag"
         self._trace_position()
-        self.root.after(100, self._tick)
+        frame_ms = self.config["animation"]["frameMs"]
+        if self.fade.alpha in (0.0, 1.0) and self.fade.target == self.fade.alpha:
+            frame_ms = max(90, frame_ms)
+        self.root.after(frame_ms, self._tick)
 
     def refresh(self) -> None:
         if self.demo or self.refreshing:
@@ -550,6 +601,7 @@ class RingWidget:
             menu.grab_release()
 
     def close(self) -> None:
+        self.locator.close()
         self._trace_reason = "exit"
         self._trace_position("exit", force=True)
         self._hide_tip()
