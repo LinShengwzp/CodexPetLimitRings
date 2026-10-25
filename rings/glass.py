@@ -81,7 +81,10 @@ def plan_glass(
         disc_radius=disc_radius,
         disc_fill=disc_fill,
         disc_rim=disc_rim,
-        highlight=config["highlightColor"],
+        highlight=blend_hex(
+            config["highlightColor"], disc_fill,
+            min(0.9, config["highlightOpacity"] / 100.0),
+        ),
         highlight_opacity=config["highlightOpacity"],
         shadow_offset=(
             max(-2.0, min(2.0, config["shadowOffsetX"])) * scale,
