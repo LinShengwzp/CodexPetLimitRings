@@ -27,13 +27,11 @@ public static class CodexPetDpi {
 # Windows PowerShell 5.1 stdout defaults to a legacy console encoding. JSON
 # values are all ASCII numbers/status codes so a mismatch cannot leak strings.
 [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
-$ui = [System.Windows.Automation.AutomationElement]
-$scope = [System.Windows.Automation.TreeScope]
 $imageType = [System.Windows.Automation.ControlType]::Image
 $name = "GPT" + [char]0x5A18 + " " + [char]0x865A + [char]0x62DF + [char]0x5BA0 + [char]0x7269
-$byName = New-Object System.Windows.Automation.PropertyCondition($ui::NameProperty, $name)
-$byType = New-Object System.Windows.Automation.PropertyCondition($ui::ControlTypeProperty, $imageType)
-$exact = New-Object System.Windows.Automation.AndCondition($byName, $byType)
+$byName = [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty, $name)
+$byType = [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ControlTypeProperty, $imageType)
+$exact = [System.Windows.Automation.AndCondition]::new($byName, $byType)
 $handle = [IntPtr]$HostHwnd
 $cached = $null
 
@@ -71,11 +69,11 @@ while ($true) {
         if ($null -eq $result) {
             $root = [System.Windows.Automation.AutomationElement]::FromHandle($handle)
             if ($null -ne $root) {
-                $cached = $root.FindFirst($scope::Descendants, $exact)
+                $cached = $root.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $exact)
                 $result = Get-Bounds $cached
                 if ($null -eq $result) {
                     # Localization might change the Name but keep the class.
-                    $images = $root.FindAll($scope::Descendants, $byType)
+                    $images = $root.FindAll([System.Windows.Automation.TreeScope]::Descendants, $byType)
                     for ($i = 0; $i -lt $images.Count; $i++) {
                         $candidate = Get-Bounds $images.Item($i)
                         if ($null -ne $candidate) {
