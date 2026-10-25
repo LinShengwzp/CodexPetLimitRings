@@ -69,6 +69,40 @@ class CalibrationTests(unittest.TestCase):
         self.assertEqual((rect.left + rect.right) // 2, 3440)
         self.assertEqual((rect.top + rect.bottom) // 2, 830)
 
+    def test_no_double_count_when_host_and_mouse_move_together(self):
+        # Real 2026-10-25 user trace, around 35-36 s:
+        # host.right 1947 -> 2162 (+215), pointer.x 1546 -> 1761 (+215)
+        # Old logic produced x=1976 (+430), which drifted from the pet.
+        before = Rect(809, 0, 1947, 1600)
+        anchor = create_anchor(before, 1546, 811)
+        middle = Rect(962, 0, 2100, 1600)
+        anchor = move_anchor(
+            anchor, dx=184, dy=-223,
+            host_dx=middle.right - before.right,
+            host_dy=middle.bottom - before.bottom,
+        )
+        mascot = sprite_from_anchor(middle, anchor)
+        self.assertEqual(((mascot.left + mascot.right) // 2,
+                          (mascot.top + mascot.bottom) // 2), (1730, 588))
+        final = Rect(1024, 0, 2162, 1600)
+        anchor = move_anchor(
+            anchor, dx=31, dy=-50,
+            host_dx=final.right - middle.right,
+            host_dy=final.bottom - middle.bottom,
+        )
+        mascot = sprite_from_anchor(final, anchor)
+        self.assertEqual(((mascot.left + mascot.right) // 2,
+                          (mascot.top + mascot.bottom) // 2), (1761, 538))
+        self.assertEqual(anchor["rightInset"], 401)
+
+    def test_drag_only_inside_stationary_host(self):
+        # The full-height HWND may not move during a vertical-only drag.
+        host = Rect(0, 0, 1138, 1600)
+        anchor = create_anchor(host, 840, 600)
+        anchor = move_anchor(anchor, dx=0, dy=-250, host_dx=0, host_dy=0)
+        mascot = sprite_from_anchor(host, anchor)
+        self.assertEqual((mascot.top + mascot.bottom) // 2, 350)
+
     def test_monitor_side_and_gap(self):
         area = Rect(2560, 0, 4480, 1040)
         pet = Rect(4240, 500, 4390, 660)
