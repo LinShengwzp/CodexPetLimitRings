@@ -42,6 +42,15 @@ DEFAULT = {
         "separator": "/",
         "showPercentSign": False,
     },
+    "animation": {
+        "enabled": True,
+        "fadeInMs": 220,
+        "fadeOutMs": 130,
+        "frameMs": 33,
+    },
+    "visibility": {
+        "requireUIA": True,
+    },
     "position": {
         "side": "left",
         "gap": 10,
@@ -115,6 +124,21 @@ def normalize(data: Any) -> dict:
         conf["text"]["separator"] = t["separator"]
     if isinstance(t.get("showPercentSign"), bool):
         conf["text"]["showPercentSign"] = t["showPercentSign"]
+
+    animation = _section(data, "animation")
+    if isinstance(animation.get("enabled"), bool):
+        conf["animation"]["enabled"] = animation["enabled"]
+    for key, low, high in (
+        ("fadeInMs", 0, 1200),
+        ("fadeOutMs", 0, 1200),
+        ("frameMs", 15, 100),
+    ):
+        conf["animation"][key] = _number(
+            animation.get(key), low, high, conf["animation"][key]
+        )
+    visibility = _section(data, "visibility")
+    if isinstance(visibility.get("requireUIA"), bool):
+        conf["visibility"]["requireUIA"] = visibility["requireUIA"]
 
     p = _section(data, "position")
     if p.get("side") in ("left", "right"):
