@@ -11,6 +11,7 @@ try {
     Add-Type -AssemblyName UIAutomationClient
     Add-Type -AssemblyName UIAutomationTypes
     Add-Type -AssemblyName WindowsBase
+    Add-Type -AssemblyName System.Windows.Forms
     Add-Type -TypeDefinition @"
 using System;
 using System.Runtime.InteropServices;
@@ -84,6 +85,18 @@ while ($true) {
                     }
                 }
             }
+        }
+        if ($null -eq $result) {
+            # Chromium may lazily activate UIA only after a point query.
+            # When the cursor happens to be over the pet, FromPoint is the
+            # exact mechanism already validated in Find-PetUIA.ps1.
+            try {
+                $cursor = [System.Windows.Forms.Cursor]::Position
+                $point = [System.Windows.Point]::new([double]$cursor.X, [double]$cursor.Y)
+                $hit = [System.Windows.Automation.AutomationElement]::FromPoint($point)
+                $result = Get-Bounds $hit
+                if ($null -ne $result) { $cached = $hit }
+            } catch { }
         }
         if ($null -eq $result) {
             [Console]::Out.WriteLine('{"status":"not_found"}')
