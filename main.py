@@ -58,7 +58,22 @@ def cli() -> int:
         from rings.pet import PetLocator
         from rings.calibration import read_settings, sprite_from_anchor
         from rings.state import inspect_state_file
-        pet, details = PetLocator().inspect(diagnostic=options.diagnose)
+        locator = PetLocator()
+        pet, details = locator.inspect(diagnostic=options.diagnose)
+        # The UIA reader is an asynchronous PowerShell child. Wait briefly for
+        # a real frame rather than reporting its approximate fallback before
+        # the watcher has even initialized. Normally < 2 seconds.
+        if pet is not None and not details.get("uia_image_available"):
+            import time
+            deadline = time.monotonic() + 3.5
+            while time.monotonic() < deadline:
+                time.sleep(0.25)
+                candidate, current = locator.inspect(diagnostic=options.diagnose)
+                if current.get("uia_image_available"):
+                    pet, details = candidate, current
+                    break
+                pet, details = candidate, current
+        locator.close()
         settings = read_settings()
         manual = None
         if pet:
