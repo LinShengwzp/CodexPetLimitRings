@@ -1,55 +1,28 @@
-"""Tiny transparent Tkinter HUD; native Codex pet stays untouched."""
+"""Tiny Windows/Tkinter quota badge for Codex's *native* Mini/Pet.
+
+A transparent single window draws two concentric arcs. All UI colors, sizes,
+fonts, padding, and placement are hot-reloaded from config.json. The App Server
+query runs off the Tk thread and never uses user tokens.
+"""
 from __future__ import annotations
 
-import json
+import ctypes
 import os
 import queue
 import threading
 import time
 import tkinter as tk
-from pathlib import Path
 
 from .bridge import read_quotas
+from .calibration import (
+    create_anchor, move_anchor, read_settings, sprite_from_anchor, write_settings,
+)
+from .config import ConfigWatcher
 from .core import PetMotionTracker, Quota, Quotas, Rect, follow_position
-from .pet import PetLocator
+from .pet import Pet, PetLocator
 
 
 COLOR_KEY = "#010203"
-COLOR_5H = "#aa8bda"
-COLOR_WEEK = "#80b8e1"
-COLOR_TRACK = "#d8d2e4"
-COLOR_OLD = "#97949f"
-COLOR_WARN = "#e6b15f"
-COLOR_CRITICAL = "#ec797d"
-
-
-def config_file() -> Path:
-    root = Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "CodexPetLimitRings"
-    return root / "settings.json"
-
-
-def load_offsets() -> tuple[int, int]:
-    try:
-        data = json.loads(config_file().read_text(encoding="utf-8"))
-        # Old V1 offsets used the huge HWND's right edge as their base.
-        # Reusing them with V2's lower-left anchor sends the rings offscreen.
-        # Preserve the original JSON on disk until the user repositions.
-        if data.get("layoutVersion") != 3:
-            return 0, 0
-        return (
-            max(-1500, min(1500, int(data.get("offsetX", 0)))),
-            max(-1500, min(1500, int(data.get("offsetY", 0)))),
-        )
-    except (OSError, ValueError, TypeError, AttributeError):
-        return 0, 0
-
-
-def save_offsets(x: int, y: int) -> None:
-    file = config_file()
-    file.parent.mkdir(parents=True, exist_ok=True)
-    temp = file.with_name(file.name + ".tmp")
-    temp.write_text(json.dumps({"layoutVersion": 3, "offsetX": x, "offsetY": y}, ensure_ascii=False, indent=2), encoding="utf-8")
-    temp.replace(file)
 
 
 class RingWidget:
@@ -60,7 +33,6 @@ class RingWidget:
         self.root.title("Codex Pet Limit Rings")
         self.root.overrideredirect(True)
         self.root.configure(bg=COLOR_KEY)
-        # Windows color-key transparency keeps the desktop pet underneath visible.
         self.root.wm_attributes("-transparentcolor", COLOR_KEY)
         self.root.wm_attributes("-topmost", True)
         try:
@@ -68,34 +40,50 @@ class RingWidget:
         except tk.TclError:
             pass
 
-        self.offset_x, self.offset_y = load_offsets()
-        # In demo mode, follow the pet when visible; otherwise preview near
-        # the mouse pointer (which may be on a secondary screen).
+        self.config_watcher = ConfigWatcher()
+        self.config_watcher.refresh()
+        self.config = self.config_watcher.value
+        self.last_config_check = 0.0
+
+        stored = read_settings()
+        # V4 is sprite-anchored and independent from V1-V3 host offsets.
+        self.offset_x = int(stored.get("offsetX", 0)) if stored.get("layoutVersion") == 4 else 0
+        self.offset_y = int(stored.get("offsetY", 0)) if stored.get("layoutVersion") == 4 else 0
+        self.offset_x = max(-2500, min(2500, self.offset_x))
+        self.offset_y = max(-2500, min(2500, self.offset_y))
+        self.calibrations = stored.get("calibrations", {})
+        if not isinstance(self.calibrations, dict):
+            self.calibrations = {}
+
         self.locator = PetLocator()
-        self.pet = None
-        self.motion = PetMotionTracker(settle_seconds=0.55)
-        self.dragging_pet = False
-        self.pet_drag_settle_until = 0.0
+        self.pet: Pet | None = None
+        self.motion = PetMotionTracker(
+            settle_seconds=self.config["position"]["settleMs"] / 1000.0,
+        )
         self.preview_origin = (
             self.root.winfo_pointerx() + 22,
             self.root.winfo_pointery() + 22,
         )
-        self.diameter = 76
-        self.padding = 5
-        self.width = self.diameter + 2 * self.padding
-        self.height = self.width
+        self.width = 1
+        self.height = 1
         self.canvas = tk.Canvas(
-            self.root, width=self.width, height=self.height, bg=COLOR_KEY,
-            bd=0, highlightthickness=0, cursor="fleur",
+            self.root, bg=COLOR_KEY, bd=0, highlightthickness=0,
+            cursor="fleur",
         )
         self.canvas.pack()
+        self.dpi = 96
+        self._set_dimensions()
+
         self.values = Quotas(Quota(41), Quota(91)) if demo else Quotas(Quota(), Quota())
         self.last_success = time.monotonic() if demo else None
         self.error = ""
         self.events: queue.Queue = queue.Queue()
         self.refreshing = False
         self.drag_origin = None
+        self.pet_drag: tuple[int, int, str] | None = None
+        self.pet_drag_settle_until = 0.0
         self.tooltip: tk.Toplevel | None = None
+        self.calibration_pending = False
         self._render()
 
         self.canvas.bind("<ButtonPress-1>", self._begin_drag)
@@ -116,64 +104,149 @@ class RingWidget:
             self.refresh()
         self.root.after(100, self._tick)
 
-    def _sizes(self, dpi: int) -> None:
-        # Tk uses physical screen pixels after DPI awareness initialization.
-        scale = max(0.8, min(2.3, dpi / 96.0))
-        diameter = round(76 * scale)
-        padding = round(5 * scale)
-        width = diameter + 2 * padding
-        if width != self.width:
-            self.diameter = diameter
-            self.padding = padding
-            self.width = self.height = width
-            self.canvas.config(width=width, height=width)
-            self._render()
+    def _set_dimensions(self) -> None:
+        style = self.config
+        scale = max(0.8, min(2.3, self.dpi / 96.0))
+        outer = style["rings"]["outer"]["diameter"]
+        pad = style["background"]["padding"]
+        self.width = self.height = round((outer + 2 * pad) * scale)
+        self.canvas.config(width=self.width, height=self.height)
 
-    def _ring_color(self, quota: Quota, normal: str) -> str:
+    @staticmethod
+    def _hex_color(value: str) -> str:
+        return value
+
+    def _ring_color(self, quota: Quota, color: str) -> str:
+        palette = self.config["rings"]
         if quota.remaining is None:
-            return COLOR_OLD
+            return palette["unknownColor"]
         if self.last_success is None or time.monotonic() - self.last_success > 180:
-            return COLOR_OLD
-        if quota.remaining < 10:
-            return COLOR_CRITICAL
-        if quota.remaining < 20:
-            return COLOR_WARN
-        return normal
+            return palette["unknownColor"]
+        if quota.remaining < palette["criticalBelow"]:
+            return palette["criticalColor"]
+        if quota.remaining < palette["warningBelow"]:
+            return palette["warningColor"]
+        return color
 
     def _render(self) -> None:
-        """Two concentric rings: outer 5h purple, inner weekly blue."""
         self.canvas.delete("all")
-        d = self.diameter
-        p = self.padding
-        scale = d / 76.0
-        center = p + d / 2
-        outer = self.values.five_hour
-        inner = self.values.weekly
+        conf = self.config
+        scale = max(0.8, min(2.3, self.dpi / 96.0))
+        outer = conf["rings"]["outer"]
+        inner = conf["rings"]["inner"]
+        cx = cy = self.width / 2.0
+        bg = conf["background"]
 
-        def arc(quota: Quota, normal: str, inset: float, stroke: int) -> None:
-            left = p + round(inset * scale)
-            right = p + d - round(inset * scale)
+        if bg["enabled"]:
+            margin = max(1, round(bg["borderWidth"] * scale / 2 + 1))
             self.canvas.create_oval(
-                left, left, right, right, outline=COLOR_TRACK, width=stroke,
+                margin, margin, self.width - margin, self.height - margin,
+                fill=bg["color"],
+                outline=bg["borderColor"] if bg["borderWidth"] > 0 else "",
+                width=round(bg["borderWidth"] * scale),
+            )
+
+        def ring(quota: Quota, style: dict):
+            d = style["diameter"] * scale
+            stroke = max(1, round(style["stroke"] * scale))
+            box = (cx - d / 2, cy - d / 2, cx + d / 2, cy + d / 2)
+            self.canvas.create_oval(
+                *box, outline=conf["rings"]["trackColor"], width=stroke,
             )
             if quota.remaining is not None and quota.remaining > 0:
-                self.canvas.create_arc(
-                    left, left, right, right, start=90,
-                    extent=-min(359.9, quota.remaining * 3.599),
-                    style="arc", outline=self._ring_color(quota, normal),
-                    width=stroke,
-                )
+                color = self._ring_color(quota, style["color"])
+                if quota.remaining == 100:
+                    self.canvas.create_oval(*box, outline=color, width=stroke)
+                else:
+                    self.canvas.create_arc(
+                        *box, start=90, extent=-(quota.remaining * 3.6),
+                        style="arc", outline=color, width=stroke,
+                    )
 
-        arc(outer, COLOR_5H, 5, max(3, round(5 * scale)))
-        arc(inner, COLOR_WEEK, 16, max(2, round(4 * scale)))
-        five = "--" if outer.remaining is None else str(outer.remaining)
-        week = "--" if inner.remaining is None else str(inner.remaining)
+        ring(self.values.five_hour, outer)
+        ring(self.values.weekly, inner)
+
+        text = conf["text"]
+        a = "--" if self.values.five_hour.remaining is None else str(self.values.five_hour.remaining)
+        b = "--" if self.values.weekly.remaining is None else str(self.values.weekly.remaining)
+        suffix = "%" if text["showPercentSign"] else ""
+        label = f"{a}{suffix}{text['separator']}{b}{suffix}"
+        weight = "bold" if text["bold"] else "normal"
         self.canvas.create_text(
-            center, center, text=f"{five}/{week}", fill="#706083",
-            font=("Segoe UI", -max(10, round(12 * scale)), "bold"),
+            cx, cy, text=label, fill=text["color"],
+            font=(text["fontFamily"], -max(7, round(text["fontSize"] * scale)), weight),
         )
 
+    def _monitor_key(self, pet: Pet) -> str:
+        area = pet.work_area
+        return f"{area.left},{area.top},{area.right},{area.bottom}"
+
+    def _effective_rect(self, pet: Pet) -> Rect:
+        if pet.precise:
+            return pet.rect
+        anchor = self.calibrations.get(self._monitor_key(pet))
+        calibrated = sprite_from_anchor(pet.host_rect, anchor)
+        return calibrated or pet.rect
+
+    def _effective_pet(self, pet: Pet) -> Pet:
+        rect = self._effective_rect(pet)
+        if rect is pet.rect:
+            return pet
+        from dataclasses import replace
+        return replace(pet, rect=rect, source="manually-calibrated", precise=True)
+
+    @staticmethod
+    def _mouse_pressed() -> bool:
+        if os.name != "nt":
+            return False
+        try:
+            return bool(ctypes.windll.user32.GetAsyncKeyState(0x01) & 0x8000)
+        except (OSError, AttributeError):
+            return False
+
+    def _handle_pet_drag(self, pet: Pet, now: float) -> bool:
+        """Track vertical/horizontal sprite drags even if host HWND is static.
+
+        Only activate after calibration when click began near the calibrated
+        mascot. Never infer a sprite drag from the whole full-screen host.
+        """
+        if self.drag_origin is not None or self.calibration_pending:
+            return False
+        key = self._monitor_key(pet)
+        anchor = self.calibrations.get(key)
+        if not isinstance(anchor, dict) or pet.source != "manually-calibrated":
+            return False
+
+        mx, my = self.root.winfo_pointerxy()
+        down = self._mouse_pressed()
+        if not down:
+            if self.pet_drag:
+                self.pet_drag = None
+                self.pet_drag_settle_until = now + 0.6
+                write_settings({"calibrations": self.calibrations})
+            return now < self.pet_drag_settle_until
+
+        if self.pet_drag is None:
+            rect = pet.rect
+            if rect.left - 22 <= mx <= rect.right + 22 and rect.top - 22 <= my <= rect.bottom + 22:
+                self.pet_drag = (mx, my, key)
+        else:
+            x, y, dragging_key = self.pet_drag
+            if dragging_key == key and (mx != x or my != y):
+                self.calibrations[key] = move_anchor(anchor, mx - x, my - y)
+                self.pet_drag = (mx, my, key)
+        return self.pet_drag is not None
+
     def _tick(self) -> None:
+        now = time.monotonic()
+        if now - self.last_config_check >= 1.0:
+            self.last_config_check = now
+            if self.config_watcher.refresh():
+                self.config = self.config_watcher.value
+                self.motion.settle_seconds = self.config["position"]["settleMs"] / 1000.0
+                self._set_dimensions()
+                self._render()
+
         while True:
             try:
                 status, value = self.events.get_nowait()
@@ -189,60 +262,50 @@ class RingWidget:
                 self.error = str(value)
             self._render()
 
-        # Do not fight user dragging. Movement tracking resumes on release.
         if self.drag_origin is None:
             try:
-                pet = self.locator.find()
+                raw_pet = self.locator.find()
             except Exception as exc:
-                pet = None
-                self.error = f"宠物窗口定位失败：{exc}"
-            if pet is None:
+                raw_pet = None
+                self.error = f"Codex Pet 检测失败：{exc}"
+            if raw_pet is None:
                 self.motion.reset()
-                self.dragging_pet = False
                 self.pet = None
+                self.pet_drag = None
                 if self.demo:
                     x, y = self.preview_origin
                     self.root.geometry(f"{self.width}x{self.height}{x + self.offset_x:+d}{y + self.offset_y:+d}")
                     if self.root.state() == "withdrawn":
                         self.root.deiconify()
-                else:
+                elif self.root.state() != "withdrawn":
                     self._hide_tip()
-                    if self.root.state() != "withdrawn":
-                        self.root.withdraw()
+                    self.root.withdraw()
             else:
-                if self.pet is None or self.pet.dpi != pet.dpi:
-                    self._sizes(pet.dpi)
-                self.pet = pet
-                # pet.rect is now the actual mascot position from Codex's
-                # persisted UI state, verified against its visible native host.
+                if self.pet is None or self.pet.dpi != raw_pet.dpi:
+                    self.dpi = raw_pet.dpi
+                    self._set_dimensions()
+                    self._render()
+                effective_pet = self._effective_pet(raw_pet)
+                pet_dragging = self._handle_pet_drag(effective_pet, now)
+                # _handle_pet_drag may update calibration, so recompute.
+                effective_pet = self._effective_pet(raw_pet)
+                self.pet = effective_pet
+                position = self.config["position"]
+                # Apply config offsets *in addition* to user drag offsets.
                 x, y = follow_position(
-                    pet.rect, self.width, self.height, pet.work_area,
-                    self.offset_x, self.offset_y,
+                    effective_pet.rect, self.width, self.height,
+                    effective_pet.work_area,
+                    self.offset_x + position["offsetX"],
+                    self.offset_y + position["offsetY"],
+                    side=position["side"],
+                    gap=position["gap"],
+                    vertical_ratio=position["verticalRatio"],
                 )
-                # --demo is always visible. For real usage, don't drag a
-                # trailing indicator across the desktop at a low frame rate:
-                # hide during host movement and restore after ~0.55s stable.
-                now = time.monotonic()
-                still = self.motion.should_show(pet.rect, pet.handle, now)
-                # A native host can remain stationary while its dragon sprite
-                # moves inside it. Suppress HUD as soon as the user starts
-                # dragging on/near the visible mascot, even before Codex saves
-                # the new sprite placement.
-                left_down = self._left_mouse_down()
-                mouse_x, mouse_y = self.root.winfo_pointerxy()
-                near_pet = (
-                    pet.rect.left - 45 <= mouse_x <= pet.rect.right + 45
-                    and pet.rect.top - 45 <= mouse_y <= pet.rect.bottom + 45
-                )
-                if left_down and (near_pet or self.dragging_pet):
-                    self.dragging_pet = True
-                elif not left_down and self.dragging_pet:
-                    self.dragging_pet = False
-                    self.pet_drag_settle_until = now + 0.6
-                moving = self.dragging_pet or now < self.pet_drag_settle_until
-                if not self.demo and (not still or moving):
-                    self._hide_tip()
+                settled = self.motion.should_show(effective_pet.rect, effective_pet.handle, now)
+                moving = pet_dragging or now < self.pet_drag_settle_until
+                if not self.demo and (not settled or moving):
                     if self.root.state() != "withdrawn":
+                        self._hide_tip()
                         self.root.withdraw()
                 else:
                     self.root.geometry(f"{self.width}x{self.height}{x:+d}{y:+d}")
@@ -250,16 +313,6 @@ class RingWidget:
                         self.root.deiconify()
                         self.root.wm_attributes("-topmost", True)
         self.root.after(100, self._tick)
-
-    @staticmethod
-    def _left_mouse_down() -> bool:
-        if os.name != "nt":
-            return False
-        import ctypes
-        try:
-            return bool(ctypes.windll.user32.GetAsyncKeyState(0x01) & 0x8000)
-        except (AttributeError, OSError):
-            return False
 
     def refresh(self) -> None:
         if self.demo or self.refreshing:
@@ -282,50 +335,52 @@ class RingWidget:
     def _drag(self, event) -> None:
         if self.drag_origin is None:
             return
-        x, y, ox, oy = self.drag_origin
-        self.offset_x = max(-1500, min(1500, ox + event.x_root - x))
-        self.offset_y = max(-1500, min(1500, oy + event.y_root - y))
+        start_x, start_y, offset_x, offset_y = self.drag_origin
+        self.offset_x = max(-2500, min(2500, offset_x + event.x_root - start_x))
+        self.offset_y = max(-2500, min(2500, offset_y + event.y_root - start_y))
         if self.demo and self.pet is None:
             x, y = self.preview_origin
             self.root.geometry(f"{x + self.offset_x:+d}{y + self.offset_y:+d}")
         elif self.pet is not None:
+            p = self.config["position"]
             px, py = follow_position(
                 self.pet.rect, self.width, self.height, self.pet.work_area,
-                self.offset_x, self.offset_y,
+                self.offset_x + p["offsetX"], self.offset_y + p["offsetY"],
+                side=p["side"], gap=p["gap"], vertical_ratio=p["verticalRatio"],
             )
             self.root.geometry(f"{self.width}x{self.height}{px:+d}{py:+d}")
 
-    def _end_drag(self, event) -> None:
+    def _end_drag(self, _event) -> None:
         if self.drag_origin is not None:
             self.drag_origin = None
-            save_offsets(self.offset_x, self.offset_y)
+            write_settings({"layoutVersion": 4, "offsetX": self.offset_x, "offsetY": self.offset_y})
 
     def _detail_lines(self) -> list[str]:
+        five = self.values.five_hour
+        week = self.values.weekly
         return [
-            f"5 小时：{self.values.five_hour.remaining if self.values.five_hour.remaining is not None else '--'}% · {self.values.five_hour.reset_label()}",
-            f"每周：{self.values.weekly.remaining if self.values.weekly.remaining is not None else '--'}% · {self.values.weekly.reset_label()}",
+            f"5 小时：{five.remaining if five.remaining is not None else '--'}% · {five.reset_label()}",
+            f"每周：{week.remaining if week.remaining is not None else '--'}% · {week.reset_label()}",
             "演示数据" if self.demo else (
-                "数据已过期 / 重新刷新" if self.last_success is None or time.monotonic() - self.last_success > 180
-                else "最近成功刷新：额度可用"
+                "数据过期或查询失败" if self.last_success is None or time.monotonic() - self.last_success > 180
+                else "额度已刷新"
             ),
             *(([self.error[:100]]) if self.error else []),
         ]
 
-    def _show_tip(self, event) -> None:
-        if self.drag_origin is not None or self.tooltip is not None:
+    def _show_tip(self, _event=None) -> None:
+        if self.drag_origin or self.tooltip:
             return
         tip = tk.Toplevel(self.root)
         tip.withdraw()
         tip.overrideredirect(True)
         tip.configure(bg="#eee8f5")
-        text = "\n".join(self._detail_lines())
         tk.Label(
-            tip, text=text, justify="left", fg="#594d72", bg="#eee8f5",
-            padx=10, pady=7, font=("Microsoft YaHei UI", 9),
+            tip, text="\n".join(self._detail_lines()), justify="left",
+            fg="#594d72", bg="#eee8f5", padx=10, pady=7,
+            font=("Microsoft YaHei UI", 9),
         ).pack()
-        x = self.root.winfo_rootx()
-        y = self.root.winfo_rooty() - 85
-        tip.geometry(f"+{max(0, x)}+{max(0, y)}")
+        tip.geometry(f"{self.root.winfo_rootx():+d}{self.root.winfo_rooty() - 85:+d}")
         tip.wm_attributes("-topmost", True)
         tip.deiconify()
         self.tooltip = tip
@@ -337,15 +392,65 @@ class RingWidget:
 
     def _reset_position(self) -> None:
         self.offset_x = self.offset_y = 0
-        save_offsets(0, 0)
+        write_settings({"layoutVersion": 4, "offsetX": 0, "offsetY": 0})
+
+    def _calibrate(self) -> None:
+        """Five seconds to move the pointer to the mascot's center."""
+        if self.calibration_pending:
+            return
+        self.calibration_pending = True
+        self._hide_tip()
+        self.root.after(5000, self._finish_calibration)
+
+    def _finish_calibration(self) -> None:
+        self.calibration_pending = False
+        try:
+            raw_pet = self.locator.find()
+            if raw_pet is None:
+                self.error = "校准失败：Codex Mini 未显示"
+                return
+            cx, cy = self.root.winfo_pointerxy()
+            area = raw_pet.work_area
+            # Avoid saving an anchor on an unrelated monitor.
+            if not (area.left <= cx < area.right and area.top <= cy < area.bottom + 80):
+                self.error = "校准失败：鼠标不在小龙娘所在屏幕"
+                return
+            key = self._monitor_key(raw_pet)
+            self.calibrations[key] = create_anchor(raw_pet.host_rect, cx, cy)
+            self.offset_x = self.offset_y = 0
+            self.pet_drag = None
+            self.motion.reset()
+            write_settings({
+                "layoutVersion": 4, "offsetX": 0, "offsetY": 0,
+                "calibrations": self.calibrations,
+            })
+            self.error = ""
+        except (OSError, ValueError, TypeError) as exc:
+            self.error = f"校准失败：{exc}"
+
+    def _clear_calibration(self) -> None:
+        if self.pet is not None:
+            key = self._monitor_key(self.pet)
+            self.calibrations.pop(key, None)
+            write_settings({"calibrations": self.calibrations})
+            self.motion.reset()
 
     def _show_menu(self, event) -> None:
         self._hide_tip()
         menu = tk.Menu(self.root, tearoff=False)
-        menu.add_command(label="Codex 原生宠物 · 5h / 7d", state="disabled")
+        menu.add_command(label="Codex Mini · 5h / 7d", state="disabled")
         menu.add_separator()
-        menu.add_command(label="立即刷新额度", command=self.refresh, state="disabled" if self.demo else "normal")
-        menu.add_command(label="恢复默认位置", command=self._reset_position)
+        menu.add_command(
+            label="立即刷新额度", command=self.refresh,
+            state="disabled" if self.demo else "normal",
+        )
+        menu.add_command(
+            label="校准小龙娘位置（5秒内把鼠标移到她的中心）",
+            command=self._calibrate,
+        )
+        menu.add_command(label="清除此屏幕的校准", command=self._clear_calibration)
+        menu.add_command(label="恢复圆环默认偏移", command=self._reset_position)
+        menu.add_separator()
         menu.add_command(label="退出圆环（不关闭宠物）", command=self.close)
         try:
             menu.tk_popup(event.x_root, event.y_root)
