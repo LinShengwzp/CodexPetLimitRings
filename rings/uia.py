@@ -92,7 +92,7 @@ class UIAMascotWatcher:
         if os.name != "nt" or not SCRIPT.is_file():
             return
         command = [
-            "powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive",
+            "powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive", "-Sta",
             "-ExecutionPolicy", "Bypass", "-File", str(SCRIPT),
             "-HostHwnd", str(hwnd), "-IntervalMs", "300",
         ]
