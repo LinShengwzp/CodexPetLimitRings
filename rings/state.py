@@ -116,3 +116,25 @@ def read_pet_placement(path: Path | None = None) -> PetPlacement | None:
         return parse_pet_placement(json.loads(file.read_text(encoding="utf-8-sig")))
     except (OSError, ValueError, UnicodeError):
         return None
+
+def inspect_state_file(path: Path | None = None) -> dict:
+    """Only emit safe structural diagnostics, never the Codex JSON itself."""
+    file = path if path is not None else state_file()
+    result = {"path": str(file), "exists": file.is_file(), "readable": False,
+              "open": None, "bounds_present": False, "avatar_field_names": []}
+    if not file.is_file():
+        return result
+    try:
+        root = json.loads(file.read_text(encoding="utf-8-sig"))
+        if not isinstance(root, dict):
+            return result
+        result["readable"] = True
+        result["open"] = root.get("electron-avatar-overlay-open")
+        result["bounds_present"] = isinstance(root.get("electron-avatar-overlay-bounds"), dict)
+        result["avatar_field_names"] = sorted(
+            key for key in root if isinstance(key, str)
+            and ("avatar" in key.lower() or "pet" in key.lower())
+        )[:30]
+    except (OSError, ValueError, UnicodeError):
+        pass
+    return result
