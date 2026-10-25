@@ -6,9 +6,7 @@ query runs off the Tk thread and never uses user tokens.
 """
 from __future__ import annotations
 
-import base64
 import ctypes
-import json
 import os
 import queue
 import threading
@@ -20,7 +18,7 @@ from .calibration import (
     create_anchor, move_anchor, read_settings, sprite_from_anchor, write_settings,
 )
 from .config import ConfigWatcher
-from .glass import render_glass_png
+from .glass import plan_glass
 from .core import PetMotionTracker, Quota, Quotas, Rect, follow_position
 from .pet import Pet, PetLocator
 from .transition import OpacityTransition
@@ -82,8 +80,6 @@ class RingWidget:
         )
         self.width = 1
         self.height = 1
-        self._glass_photo: tk.PhotoImage | None = None
-        self._glass_cache_key = None
         self.canvas = tk.Canvas(
             self.root, bg=COLOR_KEY, bd=0, highlightthickness=0,
             cursor="fleur",
@@ -174,15 +170,9 @@ class RingWidget:
         outer = style["rings"]["outer"]["diameter"]
         pad = style["background"]["padding"]
         if style["glass"]["enabled"]:
-            glass = style["glass"]
-            # Reserve room for the soft shadow beyond the outer stroke.
-            shadow_padding = (
-                glass["outerMargin"] + glass["shadowSpread"]
-                + glass["shadowBlur"] * 1.5
-                + max(abs(glass["shadowOffsetX"]), abs(glass["shadowOffsetY"]))
-                + 2
-            )
-            pad = max(pad, shadow_padding)
+            # Three thin pastel contours instead of the broad shadow whose
+            # PNG alpha channel became black in Windows Tk color-key mode.
+            pad = max(pad, 8 + style["glass"]["outerMargin"])
         self.width = self.height = round((outer + 2 * pad) * scale)
         self.canvas.config(width=self.width, height=self.height)
 
@@ -212,36 +202,32 @@ class RingWidget:
         bg = conf["background"]
         glass = conf["glass"]
         if glass["enabled"]:
-            # Pre-render soft edges once per style/DPI change. Drawing a bitmap
-            # each tick would be wasteful and needlessly hurt pet animation.
-            key = (self.width, round(scale, 3), outer["diameter"],
-                   json.dumps(glass, sort_keys=True))
-            if key != self._glass_cache_key:
-                try:
-                    png = render_glass_png(
-                        self.width, outer["diameter"], glass, scale
-                    )
-                    self._glass_photo = tk.PhotoImage(
-                        data=base64.b64encode(png).decode("ascii"),
-                        format="png",
-                        master=self.root,
-                    )
-                    self._glass_cache_key = key
-                except (tk.TclError, ValueError, MemoryError):
-                    # Some Tk/Win32 combinations may not support PNG alpha
-                    # and color-key transparency together. Leave a simpler
-                    # solid tinted backdrop instead of killing the pet.
-                    self._glass_photo = None
-                    self._glass_cache_key = None
-            if self._glass_photo is not None:
-                self.canvas.create_image(cx, cy, image=self._glass_photo)
-            else:
+            # Tk transparent-color windows can render transparent PNG pixels
+            # as BLACK on some Windows builds. Use safe opaque canvas shapes:
+            # a small pastel center, three nearly invisible soft contours,
+            # and a little highlight. Everything else is fully transparent.
+            plan = plan_glass(
+                outer["diameter"], inner["diameter"], inner["stroke"],
+                glass, scale,
+            )
+            for radius, color in zip(plan.shadow_radii, plan.shadow_colors):
                 self.canvas.create_oval(
-                    cx - outer["diameter"] * scale / 2,
-                    cy - outer["diameter"] * scale / 2,
-                    cx + outer["diameter"] * scale / 2,
-                    cy + outer["diameter"] * scale / 2,
-                    fill=glass["fillColor"], outline=glass["rimColor"],
+                    cx - radius, cy - radius, cx + radius, cy + radius,
+                    outline=color, width=max(1, round(scale)),
+                )
+            r = plan.disc_radius
+            self.canvas.create_oval(
+                cx - r, cy - r, cx + r, cy + r,
+                fill=plan.disc_fill, outline=plan.disc_rim,
+                width=max(1, round(scale)),
+            )
+            if plan.highlight_opacity:
+                highlight_color = plan.disc_rim
+                self.canvas.create_arc(
+                    cx - r + scale, cy - r + scale,
+                    cx + r - scale, cy + r - scale,
+                    start=35, extent=108, style="arc",
+                    outline=highlight_color, width=max(1, round(scale)),
                 )
         elif bg["enabled"]:
             margin = max(1, round(bg["borderWidth"] * scale / 2 + 1))
