@@ -31,6 +31,11 @@ def config_file() -> Path:
 def load_offsets() -> tuple[int, int]:
     try:
         data = json.loads(config_file().read_text(encoding="utf-8"))
+        # Old V1 offsets used the huge HWND's right edge as their base.
+        # Reusing them with V2's lower-left anchor sends the rings offscreen.
+        # Preserve the original JSON on disk until the user repositions.
+        if data.get("layoutVersion") != 2:
+            return 0, 0
         return (
             max(-1500, min(1500, int(data.get("offsetX", 0)))),
             max(-1500, min(1500, int(data.get("offsetY", 0)))),
@@ -43,7 +48,7 @@ def save_offsets(x: int, y: int) -> None:
     file = config_file()
     file.parent.mkdir(parents=True, exist_ok=True)
     temp = file.with_name(file.name + ".tmp")
-    temp.write_text(json.dumps({"offsetX": x, "offsetY": y}, ensure_ascii=False, indent=2), encoding="utf-8")
+    temp.write_text(json.dumps({"layoutVersion": 2, "offsetX": x, "offsetY": y}, ensure_ascii=False, indent=2), encoding="utf-8")
     temp.replace(file)
 
 
