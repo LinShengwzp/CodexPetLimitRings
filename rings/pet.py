@@ -116,6 +116,7 @@ class PetLocator:
         self._last_lookup_at = 0.0
         self._last_pet: Pet | None = None
         self._uia = UIAMascotWatcher()
+        self.require_uia = True
         self.proc_type = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
 
         def sig(func, argtypes, restype):
@@ -194,6 +195,7 @@ class PetLocator:
             "state_mascot": placement.mascot.__dict__ if placement is not None else None,
             "mascot_geometry_available": placement.has_mascot_geometry if placement is not None else False,
             "candidates": [],
+            "uia_status": "no_host",
         }
         matches: list[tuple[int, int, Rect, str]] = []
         @self.proc_type
@@ -225,11 +227,20 @@ class PetLocator:
             return True
         self.user32.EnumWindows(cb, 0)
         if not matches:
+            self._uia.close()
             return None, diagnostics
         matches.sort(reverse=True)
         score, handle, host, process = matches[0]
         sprite, precise, source = sprite_from_host(host, placement)
-        uia_rect = self._uia.get(handle)
+        uia_status, uia_rect = self._uia.observe(handle)
+        diagnostics["uia_status"] = uia_status
+        diagnostics["uia_image_available"] = uia_status == "present"
+        diagnostics["uia_mascot_rect"] = uia_rect.__dict__ if uia_rect else None
+        # Fail closed when Mini is hidden or UIA stops responding. Keeping the
+        # approximate host-corner fallback would show rings without a pet.
+        # This can be disabled explicitly for incompatible Codex builds.
+        if self.require_uia and uia_status != "present":
+            return None, diagnostics
         if uia_rect is not None:
             sprite, precise, source = uia_rect, True, "uia-image"
         pet = Pet(
@@ -237,8 +248,6 @@ class PetLocator:
             work_area=self._work_area(handle, sprite), dpi=self._dpi(handle),
             process=process, precise=precise, source=source,
         )
-        diagnostics["uia_image_available"] = uia_rect is not None
-        diagnostics["uia_mascot_rect"] = uia_rect.__dict__ if uia_rect else None
         return pet, diagnostics
 
     def close(self) -> None:
