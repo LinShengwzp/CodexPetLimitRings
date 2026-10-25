@@ -1,29 +1,25 @@
-"""Glass appearance is rendered without screenshot capture or Pillow."""
-import struct
+"""Faux glass must never rely on translucent PNG in Tk transparent windows."""
 import unittest
-import zlib
 
 from rings.config import DEFAULT, normalize
-from rings.glass import render_glass_png, render_glass_rgba, encode_png
+from rings.glass import blend_hex, plan_glass
 
 
 class FauxGlassTests(unittest.TestCase):
-    def test_default_glass_is_enabled_and_configurable(self):
+    def test_default_theme_and_external_options(self):
         self.assertTrue(DEFAULT["glass"]["enabled"])
-        c = normalize({
-            "glass": {
-                "enabled": False, "fillColor": "#ffeedd", "fillOpacity": 33,
-                "shadowBlur": 15, "shadowOpacity": 60, "rimOpacity": 20,
-                "shadowOffsetY": -4,
-            }
-        })
+        c = normalize({"glass": {
+            "enabled": False, "fillColor": "#ffeedd", "fillOpacity": 33,
+            "shadowBlur": 15, "shadowOpacity": 60, "rimOpacity": 20,
+            "shadowOffsetY": -4,
+        }})
         self.assertFalse(c["glass"]["enabled"])
         self.assertEqual(c["glass"]["fillColor"], "#ffeedd")
         self.assertEqual(c["glass"]["fillOpacity"], 33)
         self.assertEqual(c["glass"]["shadowBlur"], 15)
         self.assertEqual(c["glass"]["shadowOffsetY"], -4)
 
-    def test_invalid_theme_is_rejected_individually(self):
+    def test_invalid_config_is_clamped(self):
         c = normalize({"glass": {
             "fillOpacity": -20, "shadowOpacity": "loud",
             "shadowBlur": 999, "fillColor": "white",
@@ -32,32 +28,37 @@ class FauxGlassTests(unittest.TestCase):
         self.assertEqual(c["glass"]["shadowBlur"], DEFAULT["glass"]["shadowBlur"])
         self.assertEqual(c["glass"]["fillColor"], DEFAULT["glass"]["fillColor"])
 
-    def test_shadow_is_soft_and_background_translucent(self):
-        size = 116
-        rgba = render_glass_rgba(size, 78, DEFAULT["glass"])
-        self.assertEqual(len(rgba), size * size * 4)
-        def alpha(x, y):
-            return rgba[4 * (y * size + x) + 3]
-        self.assertEqual(alpha(0, 0), 0)
-        self.assertGreater(alpha(58, 58), 100)
-        # Shadow softens outward beyond the glass disc (~radius 41).
-        self.assertGreater(alpha(107, 58), 0)
-        self.assertLess(alpha(107, 58), alpha(98, 58))
+    def test_blend_is_opaque_safe_hex_and_not_black(self):
+        self.assertEqual(blend_hex("#ffffff", "#000000", 0.5), "#808080")
+        self.assertEqual(blend_hex("#ffffff", "#000000", -1), "#000000")
+        self.assertEqual(blend_hex("#ffffff", "#000000", 2), "#ffffff")
 
-    def test_png_is_valid_rgba_with_expected_dimensions(self):
-        image = render_glass_png(104, 78, DEFAULT["glass"])
-        self.assertEqual(image[:8], b"\x89PNG\r\n\x1a\n")
-        self.assertEqual(image[12:16], b"IHDR")
-        self.assertEqual(struct.unpack("!II", image[16:24]), (104, 104))
-        self.assertEqual(image[24:26], bytes((8, 6)))
-        with self.assertRaises(ValueError):
-            encode_png(4, 3, b"123")
+    def test_small_center_disc_and_subtle_shadow(self):
+        plan = plan_glass(78, 54, 5, DEFAULT["glass"], 1)
+        self.assertLess(plan.disc_radius, 25)
+        self.assertGreater(plan.disc_radius, 18)
+        self.assertEqual(len(plan.shadow_colors), 3)
+        self.assertLess(max(plan.shadow_radii), 49)
+        # The old PNG rendered as a black annulus on the user's Windows Tk.
+        # The new halo is entirely light, opaque Tk colors.
+        for color in plan.shadow_colors:
+            self.assertRegex(color, r"^#[0-9a-f]{6}$")
+            self.assertGreater(int(color[1:3], 16), 170)
+            self.assertGreater(int(color[3:5], 16), 160)
+            self.assertGreater(int(color[5:7], 16), 180)
 
-    def test_disabled_opacity_can_be_zero(self):
-        glass = dict(DEFAULT["glass"], shadowOpacity=0, fillOpacity=0,
-                     rimOpacity=0, highlightOpacity=0)
-        rgba = render_glass_rgba(90, 70, glass)
-        self.assertFalse(any(rgba[i + 3] for i in range(0, len(rgba), 4)))
+    def test_shadow_offset_is_capped_without_dark_halo(self):
+        opts = dict(DEFAULT["glass"], shadowBlur=24, shadowSpread=20,
+                    shadowOffsetY=20, shadowOpacity=100)
+        plan = plan_glass(78, 54, 5, opts)
+        self.assertLess(max(plan.shadow_radii), 50)
+        self.assertEqual(plan.shadow_offset[1], 2.0)
+
+    def test_source_no_photo_image_alpha_dependency(self):
+        from pathlib import Path
+        ui = (Path(__file__).resolve().parent.parent / "rings" / "ui.py").read_text(encoding="utf-8")
+        self.assertNotIn("tk.PhotoImage", ui)
+        self.assertNotIn("create_image(", ui)
 
 
 if __name__ == "__main__":
