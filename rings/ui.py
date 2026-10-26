@@ -9,10 +9,13 @@ from __future__ import annotations
 import ctypes
 import os
 import queue
+import subprocess
 import threading
 import time
 import tkinter as tk
+from tkinter import messagebox
 
+from .lifecycle import autostart_command, hidden_creation_flags, restart_command
 from .bridge import read_quotas
 from .calibration import (
     create_anchor, move_anchor, read_settings, sprite_from_anchor, write_settings,
@@ -93,6 +96,7 @@ class RingWidget:
         self.error = ""
         self.events: queue.Queue = queue.Queue()
         self.refreshing = False
+        self._autostart_busy = False
         self.drag_origin = None
         # Mouse x/y, monitor key, host.right/bottom at previous drag sample.
         self.pet_drag: tuple[int, int, str, int, int] | None = None
@@ -409,6 +413,15 @@ class RingWidget:
                 status, value = self.events.get_nowait()
             except queue.Empty:
                 break
+            if status == "autostart_result":
+                self._autostart_busy = False
+                action, success, detail = value
+                title = {"Install": "启用开机自启", "Remove": "停用开机自启", "Status": "开机自启状态"}[action]
+                if success:
+                    messagebox.showinfo(title, detail, parent=self.root)
+                else:
+                    messagebox.showerror(title + "失败", detail, parent=self.root)
+                continue
             self.refreshing = False
             self._hide_tip()
             if status == "ok":
@@ -612,6 +625,55 @@ class RingWidget:
             self._trace_reason = "calibration_cleared"
             self._trace_position("calibration_cleared", force=True)
 
+    def _manage_autostart(self, mode: str) -> None:
+        """Run bundled autostart management off the Tk/UIA thread."""
+        if self._autostart_busy:
+            return
+        self._autostart_busy = True
+
+        def worker():
+            try:
+                result = subprocess.run(
+                    autostart_command(mode),
+                    cwd=str(autostart_command.__globals__["ROOT"]),
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    timeout=25,
+                    creationflags=hidden_creation_flags(),
+                    check=False,
+                )
+                success = result.returncode == 0
+                detail = (result.stdout if success else result.stderr or result.stdout).strip()
+                if not detail:
+                    detail = "操作完成。" if success else f"PowerShell 返回错误码 {result.returncode}"
+            except (OSError, subprocess.TimeoutExpired) as exc:
+                success, detail = False, str(exc)
+            self.events.put(("autostart_result", (mode, success, detail[:1500])))
+
+        threading.Thread(target=worker, daemon=True, name="codex-pet-autostart").start()
+
+    def _restart_app(self) -> None:
+        """Release the single-instance mutex before a fresh instance starts."""
+        if self.demo:
+            return
+        try:
+            subprocess.Popen(
+                restart_command(os.getpid()),
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                creationflags=hidden_creation_flags(),
+                close_fds=True,
+            )
+        except OSError as exc:
+            messagebox.showerror("重新启动失败", str(exc), parent=self.root)
+            return
+        self.close()
+
     def _show_menu(self, event) -> None:
         self._hide_tip()
         menu = tk.Menu(self.root, tearoff=False)
@@ -627,6 +689,24 @@ class RingWidget:
         )
         menu.add_command(label="清除此屏幕的校准", command=self._clear_calibration)
         menu.add_command(label="恢复圆环默认偏移", command=self._reset_position)
+        menu.add_separator()
+        menu.add_command(
+            label="重新启动圆环",
+            command=self._restart_app,
+            state="disabled" if self.demo else "normal",
+        )
+        menu.add_command(
+            label="启用开机自启", command=lambda: self._manage_autostart("Install"),
+            state="disabled" if self._autostart_busy else "normal",
+        )
+        menu.add_command(
+            label="停用开机自启", command=lambda: self._manage_autostart("Remove"),
+            state="disabled" if self._autostart_busy else "normal",
+        )
+        menu.add_command(
+            label="查看自启状态", command=lambda: self._manage_autostart("Status"),
+            state="disabled" if self._autostart_busy else "normal",
+        )
         menu.add_separator()
         menu.add_command(label="退出圆环（不关闭宠物）", command=self.close)
         try:
