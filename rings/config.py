@@ -35,7 +35,7 @@ DEFAULT = {
         "padding": 8,
     },
     "glass": {
-        "enabled": True,
+        "enabled": False,
         "fillColor": "#f7f2ff",
         "fillOpacity": 56,
         "shadowColor": "#2d244d",
