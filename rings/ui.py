@@ -15,7 +15,7 @@ import time
 import tkinter as tk
 from tkinter import messagebox
 
-from .lifecycle import autostart_command, hidden_creation_flags, restart_command
+from .lifecycle import ROOT, autostart_command, hidden_creation_flags, restart_command
 from .bridge import read_quotas
 from .calibration import (
     create_anchor, move_anchor, read_settings, sprite_from_anchor, write_settings,
@@ -635,7 +635,7 @@ class RingWidget:
             try:
                 result = subprocess.run(
                     autostart_command(mode),
-                    cwd=str(autostart_command.__globals__["ROOT"]),
+                    cwd=str(ROOT),
                     stdin=subprocess.DEVNULL,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,
