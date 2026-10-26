@@ -50,7 +50,7 @@
     "requireUIA": true
   },
   "glass": {
-    "enabled": true,
+    "enabled": false,
     "fillColor": "#f7f2ff",
     "fillOpacity": 56,
     "shadowColor": "#2d244d",
