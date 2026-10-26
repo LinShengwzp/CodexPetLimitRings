@@ -26,7 +26,7 @@ jobs:
         run: |
           $tokens = $null
           $errors = $null
-          foreach ($script in @("scripts/PetUiaWatcher.ps1", "scripts/Autostart.ps1")) {
+          foreach ($script in @("scripts/PetUiaWatcher.ps1", "scripts/Autostart.ps1", "scripts/Restart.ps1")) {
             $tokens = $null
             $errors = $null
             [void][System.Management.Automation.Language.Parser]::ParseFile($script, [ref]$tokens, [ref]$errors)
