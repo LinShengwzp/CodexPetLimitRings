@@ -7,7 +7,7 @@ from rings.glass import blend_hex, plan_glass
 
 class FauxGlassTests(unittest.TestCase):
     def test_default_theme_and_external_options(self):
-        self.assertTrue(DEFAULT["glass"]["enabled"])
+        self.assertFalse(DEFAULT["glass"]["enabled"])
         c = normalize({"glass": {
             "enabled": False, "fillColor": "#ffeedd", "fillOpacity": 33,
             "shadowBlur": 15, "shadowOpacity": 60, "rimOpacity": 20,
