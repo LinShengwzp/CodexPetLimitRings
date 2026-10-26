@@ -89,6 +89,9 @@ class RingWidget:
         )
         self.canvas.pack()
         self.dpi = 96
+        self._glass_cache_key: tuple | None = None
+        self._glass_cache = None
+        self._glass_drawn: tuple | None = None
         self._set_dimensions()
 
         self.values = Quotas(Quota(41), Quota(91)) if demo else Quotas(Quota(), Quota())
@@ -168,15 +171,34 @@ class RingWidget:
             except tk.TclError:
                 self._opacity_supported = False
 
+    def _glass_plan(self):
+        """Cache the dither plan; geometry only changes with config/DPI."""
+        conf = self.config
+        scale = max(0.8, min(2.3, self.dpi / 96.0))
+        outer = conf["rings"]["outer"]
+        inner = conf["rings"]["inner"]
+        key = (
+            tuple(sorted(conf["glass"].items())),
+            outer["diameter"], outer["stroke"],
+            inner["diameter"], inner["stroke"], scale,
+        )
+        if key != self._glass_cache_key:
+            self._glass_cache = plan_glass(
+                outer["diameter"], outer["stroke"],
+                inner["diameter"], inner["stroke"],
+                conf["glass"], scale,
+            )
+            self._glass_cache_key = key
+        return self._glass_cache
+
     def _set_dimensions(self) -> None:
         style = self.config
         scale = max(0.8, min(2.3, self.dpi / 96.0))
         outer = style["rings"]["outer"]["diameter"]
         pad = style["background"]["padding"]
         if style["glass"]["enabled"]:
-            # Three thin pastel contours instead of the broad shadow whose
-            # PNG alpha channel became black in Windows Tk color-key mode.
-            pad = max(pad, 8 + style["glass"]["outerMargin"])
+            # Window must fit every dithered shadow/frost pixel.
+            pad = max(pad, self._glass_plan().pad_units)
         self.width = self.height = round((outer + 2 * pad) * scale)
         self.canvas.config(width=self.width, height=self.height)
 
@@ -197,7 +219,10 @@ class RingWidget:
         return color
 
     def _render(self) -> None:
-        self.canvas.delete("all")
+        # Only rings/text/legacy background are redrawn each refresh; the
+        # dithered glass stipple is cached under the "glass" tag and always
+        # stays below the "fg" items drawn afterwards.
+        self.canvas.delete("fg")
         conf = self.config
         scale = max(0.8, min(2.3, self.dpi / 96.0))
         outer = conf["rings"]["outer"]
@@ -205,42 +230,35 @@ class RingWidget:
         cx = cy = self.width / 2.0
         bg = conf["background"]
         glass = conf["glass"]
-        if glass["enabled"]:
-            # Tk transparent-color windows can render transparent PNG pixels
-            # as BLACK on some Windows builds. Use safe opaque canvas shapes:
-            # a small pastel center, three nearly invisible soft contours,
-            # and a little highlight. Everything else is fully transparent.
-            plan = plan_glass(
-                outer["diameter"], inner["diameter"], inner["stroke"],
-                glass, scale,
-            )
-            shadow_x, shadow_y = plan.shadow_offset
-            for radius, color in zip(plan.shadow_radii, plan.shadow_colors):
-                self.canvas.create_oval(
-                    cx + shadow_x - radius, cy + shadow_y - radius,
-                    cx + shadow_x + radius, cy + shadow_y + radius,
-                    outline=color, width=max(1, round(scale)),
-                )
-            r = plan.disc_radius
-            self.canvas.create_oval(
-                cx - r, cy - r, cx + r, cy + r,
-                fill=plan.disc_fill, outline=plan.disc_rim,
-                width=max(1, round(scale)),
-            )
-            if plan.highlight_opacity:
-                self.canvas.create_arc(
-                    cx - r + scale, cy - r + scale,
-                    cx + r - scale, cy + r - scale,
-                    start=35, extent=108, style="arc",
-                    outline=plan.highlight, width=max(1, round(scale)),
-                )
-        elif bg["enabled"]:
+        glass_on = bool(glass["enabled"])
+        if glass_on:
+            # Tk color-key windows render partially transparent PNG pixels as
+            # black on some builds, so translucency is simulated with an
+            # ordered dither of fully opaque 1px rectangles; the transparent
+            # holes let the desktop through, faking a soft shadow and frosted
+            # disc over any wallpaper. No PhotoImage or PNG alpha involved.
+            plan = self._glass_plan()
+            drawn = self._glass_drawn
+            if (drawn is None or drawn[0] is not plan
+                    or drawn[1] != self.width or drawn[2] != self.height):
+                self.canvas.delete("glass")
+                for x0, x1, y, color in plan.runs:
+                    self.canvas.create_rectangle(
+                        cx + x0, cy + y, cx + x1, cy + y,
+                        fill=color, outline="", tags=("glass",),
+                    )
+                self._glass_drawn = (plan, self.width, self.height)
+        elif self._glass_drawn is not None:
+            self.canvas.delete("glass")
+            self._glass_drawn = None
+        if not glass_on and bg["enabled"]:
             margin = max(1, round(bg["borderWidth"] * scale / 2 + 1))
             self.canvas.create_oval(
                 margin, margin, self.width - margin, self.height - margin,
                 fill=bg["color"],
                 outline=bg["borderColor"] if bg["borderWidth"] > 0 else "",
                 width=round(bg["borderWidth"] * scale),
+                tags=("fg",),
             )
 
         def ring(quota: Quota, style: dict):
@@ -249,15 +267,16 @@ class RingWidget:
             box = (cx - d / 2, cy - d / 2, cx + d / 2, cy + d / 2)
             self.canvas.create_oval(
                 *box, outline=conf["rings"]["trackColor"], width=stroke,
+                tags=("fg",),
             )
             if quota.remaining is not None and quota.remaining > 0:
                 color = self._ring_color(quota, style["color"])
                 if quota.remaining == 100:
-                    self.canvas.create_oval(*box, outline=color, width=stroke)
+                    self.canvas.create_oval(*box, outline=color, width=stroke, tags=("fg",))
                 else:
                     self.canvas.create_arc(
                         *box, start=90, extent=-(quota.remaining * 3.6),
-                        style="arc", outline=color, width=stroke,
+                        style="arc", outline=color, width=stroke, tags=("fg",),
                     )
 
         ring(self.values.five_hour, outer)
@@ -272,6 +291,7 @@ class RingWidget:
         self.canvas.create_text(
             cx, cy, text=label, fill=text["color"],
             font=(text["fontFamily"], -max(7, round(text["fontSize"] * scale)), weight),
+            tags=("fg",),
         )
 
     def _trace_position(self, event: str = "sample", *, force: bool = False) -> None:

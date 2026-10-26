@@ -7,7 +7,7 @@
 - 使用 Codex **App Server** 的只读 `account/rateLimits/read`，**不读取 `auth.json` 或复制令牌**。
 - 默认每 60 秒刷新；右键查看重置时间、立即刷新、重置位置、退出。
 - 适配 Windows 10/11 的透明窗口、多显示器和 DPI。
-- **外观配置完全外置**：两个圆环的直径、粗细、颜色、浅色瓷感底盘、轻柔轮廓、背景、字体和跟随位置；修改 `config.json` 后约 1 秒自动重新加载。
+- **外观配置完全外置**：两个圆环的直径、粗细、颜色、磨砂底盘、柔和投影、背景、字体和跟随位置；修改 `config.json` 后约 1 秒自动重新加载。
 - 没拿到数据时显示 `--`，而不是编造 0% 或 100%。
 
 > 当前仍是轻量实验版。目标是一个安静的小装饰，**不会额外显示第二只宠物**。这是独立非官方项目。
@@ -69,6 +69,48 @@ python main.py
 可编辑的外观配置：项目根目录 `config.json`（见下）。
 
 圆环不会代替 Codex 对额度的真实判断。仅当 App Server 返回了**准确的 300 / 10080 分钟窗口**时，才分别标为 5h / 7d；缺失数据将显示 `--`。
+
+## V7.3：抖动点阵重写阴影与假毛玻璃
+
+V7.1 的「三道淡紫轮廓 + 实色瓷盘」在多数壁纸上几乎看不出来，也没有阴影该有的重量感。V7.3 换了一条完全不同的路线：**有序抖动（Ordered Dithering）**。
+
+透明色键窗口里每个像素要么完全透明、要么完全不透明（这正是当年半透明 PNG 变黑胎的原因）。V7.3 把每一层装饰（阴影、磨砂底盘、亮边、高光）换算成 **4×4 Bayer 点阵**：不透明颜色点与透明小孔按透明度比例混合，眼睛会把点阵与从小孔透出的真实桌面平均掉，于是：
+
+- 阴影是真正**随背景变化的柔影**：靠近徽章处密、向外指数渐隐，带 `shadowOffsetX/Y` 偏移（光源在左上时阴影向右下沉）。
+- 底盘是**能看到壁纸的磨砂玻璃**：`fillOpacity` 现在是真实透光率，顶部略亮、底部略透，边缘有亮色 rim 和左上高光，右下有淡暗反光，星微球面感。
+- 所有像素仍是不透明实色点（Tk Canvas 矩形），**依旧不碰 PNG Alpha**、不截图、不依赖 Pillow，Windows Tk 兼容性与 V7.1 一致。
+
+点阵在 96 DPI 下已经很细，在 150%/200% 缩放屏上更接近连续渐变。徽章跟随宠物移动时本来就隐藏，不会有点阵抖动残影。玻璃点阵只在配置/DPI 变化时重建，每分钟额度刷新只重画圆环和文字，性能无变化。
+
+调优建议（写进 `config.json` 的 `glass` 段即可，约 1 秒热生效）：
+
+```json
+{
+  "glass": {
+    "enabled": true,
+    "fillColor": "#f7f2ff",
+    "fillOpacity": 62,
+    "shadowColor": "#2d244d",
+    "shadowOpacity": 30,
+    "shadowBlur": 10,
+    "shadowSpread": 1,
+    "shadowOffsetX": 0,
+    "shadowOffsetY": 3,
+    "rimColor": "#ffffff",
+    "rimOpacity": 70,
+    "highlightColor": "#ffffff",
+    "highlightOpacity": 55,
+    "outerMargin": 1
+  }
+}
+```
+
+- `fillOpacity` 越低越透壁纸（20–40 抽丝磨砂，80+ 接近瓷盘）；深色壁纸建议降低，浅色壁纸可以拉高。
+- `shadowOpacity` 是阴影峰值强度；深色壁纸可以适当加大，否则阴影不明显。
+- `shadowBlur` 是渐隐宽度（物理像素）；极端大阴影会自动限制，避免窗口膨胀。
+- 想要无装饰双环：`glass.enabled = false`。
+
+离线预览：`python scripts/glass_preview.py` 会用同一套抖动规划器在浅色/深色/照片/棋盘四种模拟壁纸上渲染徽章并导出 `logs/glass_preview.png`，不启动 Tk。
 
 ## V7.2：默认恢复极简双环
 
@@ -209,15 +251,15 @@ notepad .\config.json
 | `rings.warningColor / criticalColor / unknownColor` | 低额度 / 极低额度 / 数据未知时使用的颜色 |
 | `background.enabled` | 是否绘制传统纯色圆形背景；开启玻璃时不使用 |
 | `background.color / borderColor / borderWidth / padding` | 传统背景颜色、描边和留白 |
-| `glass.enabled / fillColor / fillOpacity` | 假毛玻璃开关、底盘色和透明度 |
-| `glass.shadowColor / shadowOpacity / shadowBlur` | 阴影颜色、透明度和柔和程度 |
-| `glass.rimColor / rimOpacity / highlightOpacity` | 高光描边与顶部轻光 |
+| `glass.enabled / fillColor / fillOpacity` | 磨砂玻璃开关、底盘色和真实透光率（抖动点阵） |
+| `glass.shadowColor / shadowOpacity / shadowBlur` | 柔影颜色、峰值强度和渐隐宽度；`shadowOffsetX/Y` 控制光源方向 |
+| `glass.rimColor / rimOpacity / highlightOpacity` | 亮色描边、左上高光与右下淡暗反光 |
 | `text.fontFamily / fontSize / bold / color` | 中心数字字体、大小、粗细和颜色 |
 | `text.separator / showPercentSign` | `41/91` 分隔符和百分号显示 |
 | `position.side / gap / verticalRatio` | 优先贴角色左侧或右侧、距离和纵向对齐位置 |
 | `position.offsetX / offsetY / settleMs` | 额外偏移和移动后恢复显示的等待时间 |
 
-注意：传统 Tkinter Canvas 纯色背景仍然只支持全透明或不透明实色；新增的假毛玻璃通过 RGBA PNG 提供局部半透明视觉效果，但并不会真的模糊桌面壁纸。颜色请输入 `#RRGGBB`。非常极端的环大小会被配置校验限制为合理范围。
+注意：Tk 透明色键窗口中每个像素只能全透明或不透明。假毛玻璃与柔影通过 **4×4 有序抖动点阵**模拟：不透明色点与透明小孔按比例混合，眼睛把它们与透出的真实桌面平均，得到随背景变化的半透明观感（并非真正模糊壁纸）。颜色请输入 `#RRGGBB`。非常极端的环大小会被配置校验限制为合理范围。
 
 `--probe` 现在还会报告 `codex_state_file`（仅文件位置、是否存在和与宠物有关的字段名），不会打印 Codex 凭据。如果返回 `manual_calibration_active=true`，表示已采用人工校准的角色坐标。
 
@@ -298,7 +340,7 @@ Codex 桌面安装 / 更新、宠物窗口属性变化可能影响探测，请�
 - `scripts/PetUiaWatcher.ps1`：后台 UIA 元素查询，只输出人物的矩形坐标。
 - `rings/state.py`：只读解析 Codex 原生 Mini 的 UI 坐标和 mascot 信息。
 - `rings/ui.py`：Tkinter 双圆环透明浮层、拖动、刷新、提示和校准。
-- `rings/glass.py`：生成完全不依赖 PNG Alpha 的浅紫瓷感调色和安全几何尺寸。
+- `rings/glass.py`：抖动点阵规划器——把柔影、磨砂底盘、亮边、高光换算成不透明 1px 矩形，完全不依赖 PNG Alpha。
 - `rings/config.py`：外观配置验证与自动重新加载。
 - `rings/calibration.py`：每屏手动校准与本地位置保存。
 - `main.py`：启动、预览、诊断入口。

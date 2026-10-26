@@ -33,26 +33,47 @@ class FauxGlassTests(unittest.TestCase):
         self.assertEqual(blend_hex("#ffffff", "#000000", -1), "#000000")
         self.assertEqual(blend_hex("#ffffff", "#000000", 2), "#ffffff")
 
-    def test_small_center_disc_and_subtle_shadow(self):
-        plan = plan_glass(78, 54, 5, DEFAULT["glass"], 1)
-        self.assertLess(plan.disc_radius, 25)
-        self.assertGreater(plan.disc_radius, 18)
-        self.assertEqual(len(plan.shadow_colors), 3)
-        self.assertLess(max(plan.shadow_radii), 49)
-        # The old PNG rendered as a black annulus on the user's Windows Tk.
-        # The new halo is entirely light, opaque Tk colors.
-        for color in plan.shadow_colors:
-            self.assertRegex(color, r"^#[0-9a-f]{6}$")
-            self.assertGreater(int(color[1:3], 16), 170)
-            self.assertGreater(int(color[3:5], 16), 160)
-            self.assertGreater(int(color[5:7], 16), 180)
+    def test_dither_runs_are_opaque_and_inside_the_window(self):
+        for scale in (1.0, 1.5, 2.3):
+            plan = plan_glass(78, 6, 54, 5, DEFAULT["glass"], scale)
+            self.assertGreater(len(plan.runs), 100, f"scale={scale}")
+            half_units = plan.pad_units + 39  # outer radius in config units
+            for x0, x1, y, color in plan.runs:
+                self.assertLessEqual(x0, x1)
+                self.assertRegex(color, r"^#[0-9A-Fa-f]{6}$")
+                # Never paint the transparent color key itself.
+                self.assertNotEqual(color.lower(), "#010203")
+                for x in (x0, x1):
+                    self.assertLessEqual(abs(x) / scale, half_units + 1.5)
+                self.assertLessEqual(abs(y) / scale, half_units + 1.5)
+            # A soft stipple halo really extends beyond the ring silhouette.
+            self.assertGreater(max(abs(y) for _, _, y, _ in plan.runs) / scale, 44)
 
-    def test_shadow_offset_is_capped_without_dark_halo(self):
-        opts = dict(DEFAULT["glass"], shadowBlur=24, shadowSpread=20,
-                    shadowOffsetY=20, shadowOpacity=100)
-        plan = plan_glass(78, 54, 5, opts)
-        self.assertLess(max(plan.shadow_radii), 50)
-        self.assertEqual(plan.shadow_offset[1], 2.0)
+    def test_shadow_strength_follows_opacity(self):
+        dim = dict(DEFAULT["glass"], shadowOpacity=8)
+        strong = dict(DEFAULT["glass"], shadowOpacity=90)
+
+        def shadow_pixels(opts):
+            plan = plan_glass(78, 6, 54, 5, opts, 1.0)
+            return sum(x1 - x0 + 1 for x0, x1, _, c in plan.runs
+                       if c == opts["shadowColor"])
+
+        self.assertGreater(shadow_pixels(strong), shadow_pixels(dim) * 4)
+
+    def test_fill_opacity_controls_frost_density(self):
+        faint = dict(DEFAULT["glass"], fillOpacity=20)
+        dense = dict(DEFAULT["glass"], fillOpacity=95)
+
+        def fill_pixels(opts):
+            plan = plan_glass(78, 6, 54, 5, opts, 1.0)
+            return sum(x1 - x0 + 1 for x0, x1, _, c in plan.runs
+                       if c == opts["fillColor"])
+
+        self.assertGreater(fill_pixels(dense), fill_pixels(faint) * 2.5)
+
+    def test_planning_is_deterministic(self):
+        args = (78, 6, 54, 5, DEFAULT["glass"], 1.5)
+        self.assertEqual(plan_glass(*args), plan_glass(*args))
 
     def test_source_no_photo_image_alpha_dependency(self):
         from pathlib import Path
