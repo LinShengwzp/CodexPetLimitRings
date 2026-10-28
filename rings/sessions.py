@@ -9,6 +9,7 @@ only. They cannot be assigned a percent of subscription quota.
 from __future__ import annotations
 
 import json
+from contextlib import closing
 import os
 import time
 from datetime import datetime, timezone
@@ -156,7 +157,7 @@ def import_sessions(*, db_path: Path | None = None, root: Path | None = None,
     # Newest file first ensures recent activity appears even with a byte cap.
     candidates.sort(reverse=True, key=lambda x: x[0])
     budget = max_bytes
-    with connect(db_path) as db:
+    with closing(connect(db_path)) as db:
         for _, file, stat in candidates[:max_files]:
             if stat.st_size > 32_000_000:
                 result["skipped_large"] += 1
