@@ -25,6 +25,7 @@ def cli() -> int:
     parser = argparse.ArgumentParser(description="Attach two quota rings to Codex's native Mini/Pet.")
     parser.add_argument("--demo", action="store_true", help="preview 41/91 rings beside the pet or pointer without querying Codex")
     parser.add_argument("--once", action="store_true", help="print subscription quota JSON and exit")
+    parser.add_argument("--stats", action="store_true", help="open local statistics only, even when Mini is hidden")
     parser.add_argument("--probe", action="store_true", help="inspect live mascot position and native host window")
     parser.add_argument("--diagnose", action="store_true", help="show sanitized Codex window candidates and saved pet geometry")
     parser.add_argument(
@@ -42,6 +43,15 @@ def cli() -> int:
         return 2
 
     enable_dpi_awareness()
+
+    if options.stats:
+        import tkinter as tk
+        from rings.stats_ui import StatisticsWindow
+        root = tk.Tk()
+        root.withdraw()
+        window = StatisticsWindow(root)
+        root.mainloop()
+        return 0
 
     if options.once:
         from rings.bridge import read_quotas, QuotaReadError
