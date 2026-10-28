@@ -57,7 +57,8 @@ def points_for_plot(series: list[dict], width: int, left: float,
 
 
 class StatisticsWindow:
-    def __init__(self, parent: tk.Misc):
+    def __init__(self, parent: tk.Misc, *, on_close=None):
+        self.on_close = on_close
         self.window = tk.Toplevel(parent)
         self.window.title("小龙娘 · 法力消耗统计")
         self.window.geometry("820x710")
@@ -129,7 +130,10 @@ class StatisticsWindow:
         self.window.focus_force()
 
     def close(self) -> None:
-        self.window.destroy()
+        if self.exists():
+            self.window.destroy()
+        if self.on_close is not None:
+            self.on_close()
 
     def _interval(self) -> int:
         return dict(PERIODS).get(self.period.get(), 86400)
