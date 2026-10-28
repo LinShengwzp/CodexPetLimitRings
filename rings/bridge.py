@@ -114,7 +114,14 @@ def read_quotas(timeout: float = 12.0) -> Quotas:
                 if reply.get("error") is not None:
                     error = reply["error"]
                     info = error.get("message", "unknown") if isinstance(error, dict) else str(error)
-                    raise QuotaReadError(f"Codex 拒绝查询：{info[:160]}")
+                    # A transport failure is not an explicit permission
+                    # rejection. Preserve the upstream detail for diagnostics.
+                    if any(term in info.lower() for term in (
+                        "failed to fetch", "error sending request",
+                        "connection", "network", "timeout",
+                    )):
+                        raise QuotaReadError(f"Codex 额度服务请求失败：{info[:240]}")
+                    raise QuotaReadError(f"Codex 返回额度查询错误：{info[:240]}")
                 return reply.get("result")
             raise QuotaReadError("Codex App Server 额度查询超时")
 
