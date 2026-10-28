@@ -7,6 +7,7 @@ same reset epoch. No auth, prompts, model outputs or network payloads stored.
 from __future__ import annotations
 
 import sqlite3
+from contextlib import closing
 import time
 from datetime import datetime
 from pathlib import Path
@@ -74,11 +75,12 @@ def store_quotas(quotas: Quotas, *, ts: int | None = None, path: Path | None = N
         rows.append((now, label, quota.remaining, quota.resets_at))
     if not rows:
         return 0
-    with connect(path) as db:
+    with closing(connect(path)) as db:
         db.executemany(
             "INSERT OR REPLACE INTO quota_samples(ts,window,remaining,resets_at) VALUES(?,?,?,?)",
             rows,
         )
+        db.commit()
     return len(rows)
 
 
@@ -88,7 +90,7 @@ def quota_history(
     if window not in ("5h", "7d"):
         raise ValueError("Unsupported quota window")
     end = int(time.time()) if until is None else until
-    with connect(path) as db:
+    with closing(connect(path)) as db:
         preceding = db.execute(
             "SELECT ts,remaining,resets_at FROM quota_samples "
             "WHERE window=? AND ts<? ORDER BY ts DESC LIMIT 1", (window, since),
@@ -130,7 +132,7 @@ def quota_summary(since: int, *, until: int | None = None, path: Path | None = N
 
 def token_summary(since: int, *, until: int | None = None, path: Path | None = None) -> dict:
     end = int(time.time()) if until is None else until
-    with connect(path) as db:
+    with closing(connect(path)) as db:
         rows = db.execute(
             "SELECT model, SUM(input_tokens), SUM(output_tokens), "
             "SUM(cached_input_tokens), SUM(reasoning_output_tokens), COUNT(*) "
