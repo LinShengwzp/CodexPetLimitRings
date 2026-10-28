@@ -49,7 +49,7 @@ def cli() -> int:
         from rings.stats_ui import StatisticsWindow
         root = tk.Tk()
         root.withdraw()
-        window = StatisticsWindow(root)
+        window = StatisticsWindow(root, on_close=root.destroy)
         root.mainloop()
         return 0
 
