@@ -17,6 +17,7 @@ from tkinter import messagebox
 
 from .lifecycle import ROOT, autostart_command, hidden_creation_flags, restart_command
 from .bridge import read_quotas
+from .history import store_quotas
 from .calibration import (
     create_anchor, move_anchor, read_settings, sprite_from_anchor, write_settings,
 )
@@ -100,6 +101,7 @@ class RingWidget:
         self.events: queue.Queue = queue.Queue()
         self.refreshing = False
         self._autostart_busy = False
+        self.stats_window = None
         self.drag_origin = None
         # Mouse x/y, monitor key, host.right/bottom at previous drag sample.
         self.pet_drag: tuple[int, int, str, int, int] | None = None
@@ -519,7 +521,14 @@ class RingWidget:
 
         def work():
             try:
-                self.events.put(("ok", read_quotas()))
+                current = read_quotas()
+                # Keep quota history independent of the Mini visibility.
+                # A local SQLite failure must not break the actual rings.
+                try:
+                    store_quotas(current)
+                except Exception:
+                    pass
+                self.events.put(("ok", current))
             except Exception as exc:
                 self.events.put(("error", str(exc)))
 
@@ -694,6 +703,14 @@ class RingWidget:
             return
         self.close()
 
+    def _open_statistics(self) -> None:
+        """A full-sized local chart lives outside the tiny transparent pet HUD."""
+        if self.stats_window is not None and self.stats_window.exists():
+            self.stats_window.lift()
+            return
+        from .stats_ui import StatisticsWindow
+        self.stats_window = StatisticsWindow(self.root)
+
     def _show_menu(self, event) -> None:
         self._hide_tip()
         menu = tk.Menu(self.root, tearoff=False)
@@ -702,6 +719,9 @@ class RingWidget:
         menu.add_command(
             label="立即刷新额度", command=self.refresh,
             state="disabled" if self.demo else "normal",
+        )
+        menu.add_command(
+            label="法力消耗统计 / 历史曲线", command=self._open_statistics,
         )
         menu.add_command(
             label="校准小龙娘位置（5秒内把鼠标移到她的中心）",
@@ -735,6 +755,8 @@ class RingWidget:
             menu.grab_release()
 
     def close(self) -> None:
+        if self.stats_window is not None and self.stats_window.exists():
+            self.stats_window.close()
         self.locator.close()
         self._trace_reason = "exit"
         self._trace_position("exit", force=True)
