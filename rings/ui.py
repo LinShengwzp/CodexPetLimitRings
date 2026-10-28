@@ -18,6 +18,7 @@ from tkinter import messagebox
 from .lifecycle import ROOT, autostart_command, hidden_creation_flags, restart_command
 from .bridge import read_quotas
 from .history import store_quotas
+from .quota_status import format_refresh_status, retry_delay_ms
 from .calibration import (
     create_anchor, move_anchor, read_settings, sprite_from_anchor, write_settings,
 )
@@ -97,6 +98,10 @@ class RingWidget:
 
         self.values = Quotas(Quota(41), Quota(91)) if demo else Quotas(Quota(), Quota())
         self.last_success = time.monotonic() if demo else None
+        self.last_success_wall = time.time() if demo else None
+        self.quota_error = ""
+        self.quota_failures = 0
+        self._refresh_after = None
         self.error = ""
         self.events: queue.Queue = queue.Queue()
         self.refreshing = False
@@ -449,9 +454,16 @@ class RingWidget:
             if status == "ok":
                 self.values = value
                 self.last_success = time.monotonic()
+                self.last_success_wall = time.time()
+                self.quota_failures = 0
+                self.quota_error = ""
                 self.error = ""
-            else:
-                self.error = str(value)
+            elif status == "error":
+                # Do not mark cached values as newly refreshed on a failed
+                # App Server/network request. Keep the last valid snapshot.
+                self.quota_failures += 1
+                self.quota_error = str(value)
+            self._schedule_refresh(retry_delay_ms(self.quota_failures))
             self._render()
 
         if self.drag_origin is None:
@@ -514,9 +526,25 @@ class RingWidget:
             frame_ms = max(90, frame_ms)
         self.root.after(frame_ms, self._tick)
 
+    def _schedule_refresh(self, delay_ms: int) -> None:
+        # Keep exactly one scheduled poll: short retries must never create
+        # a second independent chain of 60-second timers.
+        if self._refresh_after is not None:
+            try:
+                self.root.after_cancel(self._refresh_after)
+            except tk.TclError:
+                pass
+        self._refresh_after = self.root.after(delay_ms, self.refresh)
+
     def refresh(self) -> None:
         if self.demo or self.refreshing:
             return
+        if self._refresh_after is not None:
+            try:
+                self.root.after_cancel(self._refresh_after)
+            except tk.TclError:
+                pass
+            self._refresh_after = None
         self.refreshing = True
 
         def work():
@@ -533,7 +561,6 @@ class RingWidget:
                 self.events.put(("error", str(exc)))
 
         threading.Thread(target=work, daemon=True, name="codex-quota-query").start()
-        self.root.after(60000, self.refresh)
 
     def _begin_drag(self, event) -> None:
         self._hide_tip()
@@ -573,9 +600,11 @@ class RingWidget:
         return [
             f"5 小时：{five.remaining if five.remaining is not None else '--'}% · {five.reset_label()}",
             f"每周：{week.remaining if week.remaining is not None else '--'}% · {week.reset_label()}",
-            "演示数据" if self.demo else (
-                "数据过期或查询失败" if self.last_success is None or time.monotonic() - self.last_success > 180
-                else "额度已刷新"
+            format_refresh_status(
+                last_success_wall=self.last_success_wall,
+                consecutive_failures=self.quota_failures,
+                error=self.quota_error,
+                demo=self.demo,
             ),
             *(([self.error[:100]]) if self.error else []),
         ]
@@ -654,6 +683,23 @@ class RingWidget:
             self._trace_reason = "calibration_cleared"
             self._trace_position("calibration_cleared", force=True)
 
+    def _show_quota_diagnostics(self) -> None:
+        """Keep the raw App Server error available without cluttering HUD."""
+        status = format_refresh_status(
+            last_success_wall=self.last_success_wall,
+            consecutive_failures=self.quota_failures,
+            error=self.quota_error,
+            demo=self.demo,
+        )
+        description = (
+            f"{status}\n"
+            f"连续失败：{self.quota_failures} 次\n"
+            f"下一次查询：{'正在查询' if self.refreshing else '按自动重试计划'}\n\n"
+            + (f"最近一次错误详情：\n{self.quota_error[:1200]}" if self.quota_error
+               else "最近一次额度读取成功，没有查询错误。")
+        )
+        messagebox.showinfo("Codex 额度读取状态", description, parent=self.root)
+
     def _manage_autostart(self, mode: str) -> None:
         """Run bundled autostart management off the Tk/UIA thread."""
         if self._autostart_busy:
@@ -721,6 +767,10 @@ class RingWidget:
             state="disabled" if self.demo else "normal",
         )
         menu.add_command(
+            label="查看额度查询状态 / 最近错误",
+            command=self._show_quota_diagnostics,
+        )
+        menu.add_command(
             label="法力消耗统计 / 历史曲线", command=self._open_statistics,
         )
         menu.add_command(
@@ -755,6 +805,12 @@ class RingWidget:
             menu.grab_release()
 
     def close(self) -> None:
+        if self._refresh_after is not None:
+            try:
+                self.root.after_cancel(self._refresh_after)
+            except tk.TclError:
+                pass
+            self._refresh_after = None
         if self.stats_window is not None and self.stats_window.exists():
             self.stats_window.close()
         self.locator.close()
